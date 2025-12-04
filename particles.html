@@ -1,0 +1,373 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Future Particle Morphing | MediaPipe & Three.js</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; }
+        
+        /* Loading Overlay */
+        #loader {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; color: #00ffff; z-index: 999;
+            transition: opacity 0.5s;
+        }
+        .spinner {
+            width: 50px; height: 50px; border: 3px solid rgba(0,255,255,0.3);
+            border-radius: 50%; border-top-color: #00ffff;
+            animation: spin 1s ease-in-out infinite; margin-bottom: 20px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        /* UI Hints */
+        #ui {
+            position: absolute; bottom: 30px; left: 0; width: 100%;
+            text-align: center; color: rgba(255,255,255,0.7); pointer-events: none;
+            text-transform: uppercase; letter-spacing: 2px; font-size: 12px;
+            text-shadow: 0 0 10px rgba(0,255,255,0.5);
+        }
+        .highlight { color: #00ffff; font-weight: bold; }
+    </style>
+    <!-- Import Maps for Three.js and MediaPipe -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/+esm"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="loader">
+        <div class="spinner"></div>
+        <div id="status">INITIALIZING NEURAL LINK...</div>
+    </div>
+
+    <div id="ui">
+        <span class="highlight">PINCH</span> TO MORPH SHAPE &nbsp;|&nbsp; <span class="highlight">MOVE HAND</span> TO ROTATE
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+
+        // --- CONFIGURATION ---
+        const PARTICLE_COUNT = 25000;
+        const PARTICLE_SIZE = 0.08;
+        const COLOR_A = new THREE.Color(0x0044ff); // Deep Electric Blue
+        const COLOR_B = new THREE.Color(0x00ffff); // Cyan
+        
+        // --- STATE MANAGEMENT ---
+        const state = {
+            currentShape: 0, // 0: Sphere, 1: Möbius, 2: Icosahedron
+            isPinching: false,
+            handPos: { x: 0, y: 0 }, // Normalized -1 to 1
+            targetRotation: { x: 0, y: 0 },
+            morphProgress: 0
+        };
+
+        // --- THREE.JS SETUP ---
+        const scene = new THREE.Scene();
+        // Add subtle fog for depth
+        scene.fog = new THREE.FogExp2(0x050505, 0.03);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.z = 4.5;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        // --- POST PROCESSING (BLOOM) ---
+        const renderScene = new RenderPass(scene, camera);
+        
+        // Resolution, Strength, Radius, Threshold
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0;
+        bloomPass.strength = 2.0; // High strength for "Energy" look
+        bloomPass.radius = 0.5;
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // --- PARTICLE SYSTEM ---
+        
+        // Arrays to store positions for different shapes
+        const posSphere = new Float32Array(PARTICLE_COUNT * 3);
+        const posMobius = new Float32Array(PARTICLE_COUNT * 3);
+        const posIcosa = new Float32Array(PARTICLE_COUNT * 3);
+        
+        // Current and Target buffers
+        const currentPositions = new Float32Array(PARTICLE_COUNT * 3);
+        
+        // 1. GENERATE SPHERE (Fibonacci Sphere for even distribution)
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            const phi = Math.acos(1 - 2 * (i + 0.5) / PARTICLE_COUNT);
+            const theta = Math.PI * (1 + 5**0.5) * (i + 0.5);
+            const r = 1.8;
+            
+            posSphere[i*3] = r * Math.sin(phi) * Math.cos(theta);
+            posSphere[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+            posSphere[i*3+2] = r * Math.cos(phi);
+            
+            // Initialize current positions
+            currentPositions[i*3] = posSphere[i*3];
+            currentPositions[i*3+1] = posSphere[i*3+1];
+            currentPositions[i*3+2] = posSphere[i*3+2];
+        }
+
+        // 2. GENERATE MÖBIUS STRIP (Parametric)
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            const u = (i / PARTICLE_COUNT) * Math.PI * 2 * 2; // Loop twice
+            const v = (Math.random() * 2 - 1) * 0.6; // Width
+            const radius = 1.4;
+
+            posMobius[i*3] = (radius + v/2 * Math.cos(u/2)) * Math.cos(u);
+            posMobius[i*3+1] = (radius + v/2 * Math.cos(u/2)) * Math.sin(u);
+            posMobius[i*3+2] = v/2 * Math.sin(u/2);
+            
+            // Add some noise to make it less "perfectly flat"
+            posMobius[i*3] += (Math.random() - 0.5) * 0.1;
+            posMobius[i*3+1] += (Math.random() - 0.5) * 0.1;
+            posMobius[i*3+2] += (Math.random() - 0.5) * 0.1;
+        }
+
+        // 3. GENERATE ICOSAHEDRON (Structure/Wireframe-ish)
+        // Helper to get random point on a line segment
+        function lerp3(p1, p2, t) {
+            return {
+                x: p1.x + (p2.x - p1.x) * t,
+                y: p1.y + (p2.y - p1.y) * t,
+                z: p1.z + (p2.z - p1.z) * t
+            };
+        }
+        
+        const t = (1 + Math.sqrt(5)) / 2;
+        const verts = [
+            {x:-1,y:t,z:0}, {x:1,y:t,z:0}, {x:-1,y:-t,z:0}, {x:1,y:-t,z:0},
+            {x:0,y:-1,z:t}, {x:0,y:1,z:t}, {x:0,y:-1,z:-t}, {x:0,y:1,z:-t},
+            {x:t,y:0,z:-1}, {x:t,y:0,z:1}, {x:-t,y:0,z:-1}, {x:-t,y:0,z:1}
+        ].map(v => ({x:v.x, y:v.y, z:v.z}));
+        
+        // Define edges (indices of connected vertices)
+        // Simplified approach: Pick random pairs, check distance? No, hardcode edges of Icosahedron.
+        // Or simpler: Generate points on faces.
+        // Let's generate points concentrating on vertices and edges for a "Structure" look.
+        
+        // Actually, let's use a simpler "Cube with noise" or "Complex geometric cloud" to ensure robust generation in single file
+        // Let's do a noisy Icosahedron Cloud.
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            // Pick a random vertex
+            const vIdx = Math.floor(Math.random() * verts.length);
+            const v = verts[vIdx];
+            
+            // Scatter around the vertex + some filling volume
+            const scatter = 1.0; 
+            // We want it to look like a geometric artifact
+            posIcosa[i*3] = v.x + (Math.random() - 0.5) * scatter;
+            posIcosa[i*3+1] = v.y + (Math.random() - 0.5) * scatter;
+            posIcosa[i*3+2] = v.z + (Math.random() - 0.5) * scatter;
+        }
+
+        // --- GEOMETRY & MATERIAL ---
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
+        
+        // Custom Shader for "Glowing Energy Dot" look
+        const material = new THREE.ShaderMaterial({
+            uniforms: {
+                colorA: { value: COLOR_A },
+                colorB: { value: COLOR_B },
+                time: { value: 0 }
+            },
+            vertexShader: `
+                uniform float time;
+                varying vec3 vColor;
+                varying float vAlpha;
+                uniform vec3 colorA;
+                uniform vec3 colorB;
+
+                void main() {
+                    vec3 pos = position;
+                    // Add subtle breathing motion
+                    pos += normal * sin(time * 2.0 + position.y) * 0.05;
+                    
+                    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                    gl_Position = projectionMatrix * mvPosition;
+                    
+                    // Size attenuation based on depth
+                    gl_PointSize = ${PARTICLE_SIZE.toFixed(2)} * (300.0 / -mvPosition.z);
+                    
+                    // Gradient color based on position
+                    float mixVal = (position.y + 2.0) / 4.0;
+                    vColor = mix(colorA, colorB, mixVal);
+                }
+            `,
+            fragmentShader: `
+                varying vec3 vColor;
+                void main() {
+                    // Circular soft particle
+                    float r = distance(gl_PointCoord, vec2(0.5));
+                    if (r > 0.5) discard;
+                    
+                    // Glow falloff
+                    float glow = 1.0 - (r * 2.0);
+                    glow = pow(glow, 2.0); 
+                    
+                    gl_FragColor = vec4(vColor, glow); 
+                }
+            `,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        });
+
+        const particles = new THREE.Points(geometry, material);
+        scene.add(particles);
+
+        // --- MEDIAPIPE LOGIC ---
+        const videoElement = document.createElement('video');
+        let handLandmarker;
+
+        async function setupMediaPipe() {
+            try {
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm"
+                );
+                
+                handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                        delegate: "GPU"
+                    },
+                    runningMode: "VIDEO",
+                    numHands: 1
+                });
+
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                videoElement.srcObject = stream;
+                videoElement.addEventListener("loadeddata", () => {
+                    videoElement.play();
+                    document.getElementById('loader').style.opacity = 0;
+                    setTimeout(() => document.getElementById('loader').style.display = 'none', 500);
+                    predictWebcam();
+                });
+            } catch (e) {
+                console.error(e);
+                document.getElementById('status').innerText = "CAMERA ACCESS DENIED or ERROR";
+                document.getElementById('status').style.color = "red";
+            }
+        }
+
+        let lastVideoTime = -1;
+        function predictWebcam() {
+            if (handLandmarker && videoElement.currentTime !== lastVideoTime) {
+                lastVideoTime = videoElement.currentTime;
+                const results = handLandmarker.detectForVideo(videoElement, performance.now());
+
+                if (results.landmarks && results.landmarks.length > 0) {
+                    const landmarks = results.landmarks[0];
+                    
+                    // 1. PINCH DETECTION (Thumb tip vs Index tip)
+                    const thumb = landmarks[4];
+                    const index = landmarks[8];
+                    const dist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
+                    
+                    const PINCH_THRESHOLD = 0.05;
+                    
+                    if (dist < PINCH_THRESHOLD) {
+                        if (!state.isPinching) {
+                            state.isPinching = true;
+                            triggerMorph(); // Change shape on pinch start
+                        }
+                    } else {
+                        state.isPinching = false;
+                    }
+
+                    // 2. ROTATION CONTROL (Palm position)
+                    // MediaPipe coords: x (0 left, 1 right), y (0 top, 1 bottom)
+                    // Map to rotation: Center (0.5, 0.5) is 0 rotation.
+                    const wrist = landmarks[0];
+                    const targetX = (wrist.x - 0.5) * 4; // Sensitivity
+                    const targetY = (wrist.y - 0.5) * 4;
+                    
+                    state.targetRotation.x = targetY; // Hand Y controls Rotate X (Up/Down)
+                    state.targetRotation.y = targetX; // Hand X controls Rotate Y (Left/Right)
+                }
+
+                requestAnimationFrame(predictWebcam);
+            } else {
+                requestAnimationFrame(predictWebcam);
+            }
+        }
+
+        // --- ANIMATION LOGIC ---
+        
+        function triggerMorph() {
+            state.currentShape = (state.currentShape + 1) % 3;
+            // Add a visual flash or impulse here if desired
+        }
+
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = clock.getElapsedTime();
+            material.uniforms.time.value = time;
+
+            // 1. Handle Particle Morphing
+            const positions = particles.geometry.attributes.position.array;
+            let targetArray;
+            
+            if (state.currentShape === 0) targetArray = posSphere;
+            else if (state.currentShape === 1) targetArray = posMobius;
+            else targetArray = posIcosa;
+
+            // Interpolation factor (Speed of morph)
+            const lerpFactor = 0.05;
+
+            for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+                // Easing function: Move current pos towards target pos
+                positions[i] += (targetArray[i] - positions[i]) * lerpFactor;
+            }
+            particles.geometry.attributes.position.needsUpdate = true;
+
+            // 2. Handle Rotation (Smooth Damping)
+            // Lerp current rotation towards target rotation derived from hand
+            particles.rotation.x += (state.targetRotation.x - particles.rotation.x) * 0.05;
+            particles.rotation.y += (state.targetRotation.y - particles.rotation.y) * 0.05;
+
+            // Also add a slow idle rotation if hands aren't moving much
+            particles.rotation.z += 0.001;
+
+            composer.render();
+        }
+
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        setupMediaPipe();
+        animate();
+
+    </script>
+</body>
+</html>
+    

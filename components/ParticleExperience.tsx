@@ -5,405 +5,364 @@
 */
 
 import React, { useEffect, useRef, useState } from 'react';
-import p5 from 'p5';
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { FilesetResolver, HandLandmarker, HandLandmarkerResult } from '@mediapipe/tasks-vision';
 
 interface ParticleExperienceProps {
   onBack: () => void;
 }
 
+const PARTICLE_COUNT = 25000;
+const PARTICLE_SIZE = 0.08;
+
 const ParticleExperience: React.FC<ParticleExperienceProps> = ({ onBack }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const p5InstanceRef = useRef<p5 | null>(null);
-  
-  // State for UI controls
-  const [handStyle, setHandStyle] = useState<'cyber' | 'skeleton' | 'stardust'>('cyber');
-  const [color, setColor] = useState('#00ffff');
   const [loading, setLoading] = useState(true);
-  const [handDetected, setHandDetected] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  
-  // Refs to pass state to p5 loop without re-instantiation
+  const [error, setError] = useState<string | null>(null);
+
+  // Mutable state for animation loop
   const stateRef = useRef({
-      handStyle: 'cyber',
-      color: '#00ffff'
+      currentShape: 0, // 0: Sphere, 1: Möbius, 2: Icosahedron
+      isPinching: false,
+      targetRotation: { x: 0, y: 0 },
   });
-
-  // Keep stateRef synced with React state
-  useEffect(() => {
-      stateRef.current.handStyle = handStyle;
-      stateRef.current.color = color;
-  }, [handStyle, color]);
-
-  // Raw Landmarks Data Ref (Shared between MediaPipe and p5)
-  // We store the full result to handle multi-hand logic
-  const landmarksRef = useRef<HandLandmarkerResult | null>(null);
 
   useEffect(() => {
     let handLandmarker: HandLandmarker | null = null;
-    let requestAnimId: number;
+    let animationId: number;
+    let renderer: THREE.WebGLRenderer;
+    let composer: EffectComposer;
+    let particles: THREE.Points;
+    let camera: THREE.PerspectiveCamera;
 
-    // --- MediaPipe Setup ---
-    const setupMediaPipe = async () => {
-      try {
-        const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm"
-        );
-        handLandmarker = await HandLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
-            delegate: "GPU"
-          },
-          runningMode: "VIDEO",
-          numHands: 2 // Enable Dual Hand Tracking
-        });
-        
-        // Start Webcam
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { width: 1280, height: 720 } 
-            });
-            if (videoRef.current) {
-                videoRef.current.srcObject = stream;
-                videoRef.current.addEventListener("loadeddata", () => {
-                    setLoading(false);
-                    predictWebcam();
-                });
-            }
+    // Arrays for morph targets
+    const posSphere = new Float32Array(PARTICLE_COUNT * 3);
+    const posMobius = new Float32Array(PARTICLE_COUNT * 3);
+    const posIcosa = new Float32Array(PARTICLE_COUNT * 3);
+    const currentPositions = new Float32Array(PARTICLE_COUNT * 3);
+
+    // --- 1. Generate Geometry Data ---
+    const initGeometryData = () => {
+        // Sphere (Fibonacci)
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            const phi = Math.acos(1 - 2 * (i + 0.5) / PARTICLE_COUNT);
+            const theta = Math.PI * (1 + 5**0.5) * (i + 0.5);
+            const r = 1.8;
+            
+            posSphere[i*3] = r * Math.sin(phi) * Math.cos(theta);
+            posSphere[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+            posSphere[i*3+2] = r * Math.cos(phi);
+            
+            // Start with sphere
+            currentPositions[i*3] = posSphere[i*3];
+            currentPositions[i*3+1] = posSphere[i*3+1];
+            currentPositions[i*3+2] = posSphere[i*3+2];
         }
-      } catch (err) {
-        console.error("Error setting up MediaPipe:", err);
-        setLoading(false);
-      }
+
+        // Möbius Strip
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            const u = (i / PARTICLE_COUNT) * Math.PI * 2 * 2; 
+            const v = (Math.random() * 2 - 1) * 0.6; 
+            const radius = 1.4;
+
+            posMobius[i*3] = (radius + v/2 * Math.cos(u/2)) * Math.cos(u);
+            posMobius[i*3+1] = (radius + v/2 * Math.cos(u/2)) * Math.sin(u);
+            posMobius[i*3+2] = v/2 * Math.sin(u/2);
+            
+            posMobius[i*3] += (Math.random() - 0.5) * 0.1;
+            posMobius[i*3+1] += (Math.random() - 0.5) * 0.1;
+            posMobius[i*3+2] += (Math.random() - 0.5) * 0.1;
+        }
+
+        // Icosahedron Cloud
+        const t = (1 + Math.sqrt(5)) / 2;
+        const verts = [
+            {x:-1,y:t,z:0}, {x:1,y:t,z:0}, {x:-1,y:-t,z:0}, {x:1,y:-t,z:0},
+            {x:0,y:-1,z:t}, {x:0,y:1,z:t}, {x:0,y:-1,z:-t}, {x:0,y:1,z:-t},
+            {x:t,y:0,z:-1}, {x:t,y:0,z:1}, {x:-t,y:0,z:-1}, {x:-t,y:0,z:1}
+        ];
+        
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            const vIdx = Math.floor(Math.random() * verts.length);
+            const v = verts[vIdx];
+            const scatter = 1.0; 
+            posIcosa[i*3] = v.x + (Math.random() - 0.5) * scatter;
+            posIcosa[i*3+1] = v.y + (Math.random() - 0.5) * scatter;
+            posIcosa[i*3+2] = v.z + (Math.random() - 0.5) * scatter;
+        }
+    };
+
+    // --- 2. Initialize Three.js ---
+    const initThree = () => {
+        if (!mountRef.current) return;
+
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050505, 0.03);
+
+        const width = mountRef.current.clientWidth;
+        const height = mountRef.current.clientHeight;
+        
+        camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 100);
+        camera.position.z = 4.5;
+
+        renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance", alpha: false });
+        renderer.setSize(width, height);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        mountRef.current.appendChild(renderer.domElement);
+
+        // Post Processing
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0;
+        bloomPass.strength = 2.0; 
+        bloomPass.radius = 0.5;
+
+        composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // Particles
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
+        
+        const material = new THREE.ShaderMaterial({
+            uniforms: {
+                colorA: { value: new THREE.Color(0x0044ff) },
+                colorB: { value: new THREE.Color(0x00ffff) },
+                time: { value: 0 }
+            },
+            vertexShader: `
+                uniform float time;
+                varying vec3 vColor;
+                uniform vec3 colorA;
+                uniform vec3 colorB;
+
+                void main() {
+                    vec3 pos = position;
+                    // Add subtle breathing motion
+                    pos += normal * sin(time * 2.0 + position.y) * 0.05;
+                    
+                    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                    gl_Position = projectionMatrix * mvPosition;
+                    
+                    // Size attenuation based on depth
+                    gl_PointSize = ${PARTICLE_SIZE.toFixed(2)} * (300.0 / -mvPosition.z);
+                    
+                    // Gradient color based on position
+                    float mixVal = (position.y + 2.0) / 4.0;
+                    vColor = mix(colorA, colorB, mixVal);
+                }
+            `,
+            fragmentShader: `
+                varying vec3 vColor;
+                void main() {
+                    // Circular soft particle
+                    float r = distance(gl_PointCoord, vec2(0.5));
+                    if (r > 0.5) discard;
+                    
+                    // Glow falloff
+                    float glow = 1.0 - (r * 2.0);
+                    glow = pow(glow, 2.0); 
+                    
+                    gl_FragColor = vec4(vColor, glow); 
+                }
+            `,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        });
+
+        particles = new THREE.Points(geometry, material);
+        scene.add(particles);
+
+        const clock = new THREE.Clock();
+
+        const animate = () => {
+            animationId = requestAnimationFrame(animate);
+            const time = clock.getElapsedTime();
+            
+            if (material) material.uniforms.time.value = time;
+
+            // 1. Morph Logic
+            const positions = particles.geometry.attributes.position.array as Float32Array;
+            let targetArray;
+            
+            if (stateRef.current.currentShape === 0) targetArray = posSphere;
+            else if (stateRef.current.currentShape === 1) targetArray = posMobius;
+            else targetArray = posIcosa;
+
+            const lerpFactor = 0.05;
+
+            for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+                positions[i] += (targetArray[i] - positions[i]) * lerpFactor;
+            }
+            particles.geometry.attributes.position.needsUpdate = true;
+
+            // 2. Rotation
+            particles.rotation.x += (stateRef.current.targetRotation.x - particles.rotation.x) * 0.05;
+            particles.rotation.y += (stateRef.current.targetRotation.y - particles.rotation.y) * 0.05;
+            particles.rotation.z += 0.001; // Idle rotation
+
+            composer.render();
+        };
+
+        animate();
+    };
+
+    // --- 3. Initialize MediaPipe ---
+    const setupMediaPipe = async () => {
+        try {
+            const vision = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm"
+            );
+            
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numHands: 1
+            });
+
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                    videoRef.current.addEventListener("loadeddata", () => {
+                        setLoading(false);
+                        predictWebcam();
+                    });
+                }
+            } else {
+                throw new Error("No camera found");
+            }
+        } catch (e) {
+            console.error(e);
+            setError("Camera access denied or unavailable.");
+            setLoading(false);
+        }
     };
 
     const predictWebcam = () => {
         if (!handLandmarker || !videoRef.current) return;
         
-        const startTimeMs = performance.now();
-        if (videoRef.current.videoWidth > 0) {
-            const result = handLandmarker.detectForVideo(videoRef.current, startTimeMs);
-            
-            if (result.landmarks && result.landmarks.length > 0) {
-                setHandDetected(true);
-                landmarksRef.current = result;
-            } else {
-                setHandDetected(false);
-                landmarksRef.current = null;
-            }
+        if (videoRef.current.videoWidth > 0 && !videoRef.current.paused) {
+           const startTimeMs = performance.now();
+           const result = handLandmarker.detectForVideo(videoRef.current, startTimeMs);
+           
+           if (result.landmarks && result.landmarks.length > 0) {
+               const landmarks = result.landmarks[0];
+               
+               // Pinch Detection (Thumb tip 4 vs Index tip 8)
+               const thumb = landmarks[4];
+               const index = landmarks[8];
+               const dist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
+               const PINCH_THRESHOLD = 0.05;
+
+               if (dist < PINCH_THRESHOLD) {
+                   if (!stateRef.current.isPinching) {
+                       stateRef.current.isPinching = true;
+                       // Trigger Morph
+                       stateRef.current.currentShape = (stateRef.current.currentShape + 1) % 3;
+                   }
+               } else {
+                   stateRef.current.isPinching = false;
+               }
+
+               // Rotation Control (Wrist 0)
+               // x: 0 (left) -> 1 (right)
+               // y: 0 (top) -> 1 (bottom)
+               const wrist = landmarks[0];
+               const targetX = (wrist.x - 0.5) * 4;
+               const targetY = (wrist.y - 0.5) * 4;
+               
+               stateRef.current.targetRotation.x = targetY; 
+               stateRef.current.targetRotation.y = targetX;
+           }
         }
-        requestAnimId = requestAnimationFrame(predictWebcam);
+        requestAnimationFrame(predictWebcam);
     };
 
-    // --- p5.js Sketch Setup ---
-    const Sketch = (p: p5) => {
-        
-        // Finger connections (pairs of indices)
-        const connections = [
-            [0, 1], [1, 2], [2, 3], [3, 4], // Thumb
-            [0, 5], [5, 6], [6, 7], [7, 8], // Index
-            [0, 9], [9, 10], [10, 11], [11, 12], // Middle
-            [0, 13], [13, 14], [14, 15], [15, 16], // Ring
-            [0, 17], [17, 18], [18, 19], [19, 20] // Pinky
-        ];
-
-        // Tips indices
-        const tips = [4, 8, 12, 16, 20];
-
-        p.setup = () => {
-            if (mountRef.current) {
-                p.createCanvas(mountRef.current.clientWidth, mountRef.current.clientHeight, p.WEBGL);
-            }
-            p.setAttributes('alpha', true);
-            // p.blendMode(p.ADD); // Additive blending for glow effect
-        };
-
-        const drawGlowLine = (x1: number, y1: number, z1: number, x2: number, y2: number, z2: number, c: p5.Color, weight: number) => {
-            // Inner core (White/Bright)
-            p.stroke(255, 255, 255, 200);
-            p.strokeWeight(weight);
-            p.line(x1, y1, z1, x2, y2, z2);
-
-            // Outer Glow (Color)
-            p.stroke(c);
-            p.strokeWeight(weight * 3);
-            p.line(x1, y1, z1, x2, y2, z2);
-            
-            // Faint Halo
-            c.setAlpha(50);
-            p.stroke(c);
-            p.strokeWeight(weight * 6);
-            p.line(x1, y1, z1, x2, y2, z2);
-        };
-
-        const drawParticle = (x: number, y: number, z: number, c: p5.Color) => {
-             p.push();
-             p.translate(x, y, z);
-             p.noStroke();
-             p.fill(c);
-             // Jitter effect for lightning style
-             if (p.random(1) > 0.9) {
-                 p.fill(255);
-                 p.sphere(6);
-             } else {
-                 p.sphere(3);
-             }
-             p.pop();
-        };
-
-        p.draw = () => {
-            p.clear();
-            p.background(0, 0, 0, 0); // Transparent background
-
-            const result = landmarksRef.current;
-            if (!result || !result.landmarks) return;
-
-            const baseColor = p.color(stateRef.current.color);
-            // Add lightning flicker to the base color
-            if (p.random(1) > 0.95) {
-                baseColor.setAlpha(255);
-            } else {
-                baseColor.setAlpha(150);
-            }
-
-            const scale = Math.min(p.width, p.height);
-
-            // Center camera somewhat
-            p.camera(0, 0, scale * 1.2, 0, 0, 0, 0, 1, 0);
-
-            // Process each hand
-            const hands = result.landmarks.map((landmarks) => {
-                return landmarks.map(lm => ({
-                    x: (lm.x - 0.5) * -p.width, // Flip X for mirror effect
-                    y: (lm.y - 0.5) * p.height, // Invert Y because p5 y-down
-                    z: lm.z * -scale // Depth
-                }));
-            });
-
-            // 1. Draw Individual Hands
-            hands.forEach((handPoints) => {
-                const style = stateRef.current.handStyle;
-
-                // Draw Skeleton Lines
-                if (style !== 'stardust') {
-                    p.stroke(stateRef.current.color);
-                    p.strokeWeight(1);
-                    p.noFill();
-                    
-                    connections.forEach(([start, end]) => {
-                        const s = handPoints[start];
-                        const e = handPoints[end];
-                        p.line(s.x, s.y, s.z, e.x, e.y, e.z);
-                    });
-                }
-
-                // Draw Joints/Particles
-                handPoints.forEach((pt, index) => {
-                    if (style === 'skeleton' && !tips.includes(index)) return; // Only tips for skeleton
-                    
-                    // Specific logic for different styles
-                    if (style === 'cyber') {
-                         drawParticle(pt.x, pt.y, pt.z, baseColor);
-                    } else if (style === 'stardust') {
-                         if (p.random(1) > 0.5) drawParticle(pt.x + p.random(-5,5), pt.y + p.random(-5,5), pt.z, baseColor);
-                    } else {
-                        // Simple
-                        p.push();
-                        p.translate(pt.x, pt.y, pt.z);
-                        p.fill(255);
-                        p.sphere(2);
-                        p.pop();
-                    }
-                });
-            });
-
-            // 2. Draw "Cat's Cradle" / String Figure Connections (Inter-hand)
-            if (hands.length === 2) {
-                const leftHand = hands[0];
-                const rightHand = hands[1];
-
-                // Logic: Connect Tip to Tip
-                // Thumb(4) to Thumb(4), Index(8) to Index(8), etc.
-                
-                tips.forEach((tipIdx) => {
-                    const lPt = leftHand[tipIdx];
-                    const rPt = rightHand[tipIdx];
-                    
-                    // Dynamic White Line (The "String")
-                    drawGlowLine(lPt.x, lPt.y, lPt.z, rPt.x, rPt.y, rPt.z, baseColor, 1.5);
-
-                    // Cross connections (Webbing) for cooler effect
-                    // Connect Left Thumb to Right Pinky, etc.
-                    if (stateRef.current.handStyle === 'cyber') {
-                         const lThumb = leftHand[4];
-                         const rPinky = rightHand[20];
-                         const rThumb = rightHand[4];
-                         const lPinky = leftHand[20];
-                         
-                         // Thinner web lines
-                         p.stroke(baseColor);
-                         p.strokeWeight(0.5);
-                         p.line(lThumb.x, lThumb.y, lThumb.z, rPinky.x, rPinky.y, rPinky.z);
-                         p.line(rThumb.x, rThumb.y, rThumb.z, lPinky.x, lPinky.y, lPinky.z);
-                    }
-                });
-                
-                // Connect Wrists
-                const lWrist = leftHand[0];
-                const rWrist = rightHand[0];
-                p.stroke(255, 50);
-                p.strokeWeight(0.5);
-                p.line(lWrist.x, lWrist.y, lWrist.z, rWrist.x, rWrist.y, rWrist.z);
-            }
-        };
-
-        p.windowResized = () => {
-            if (mountRef.current) {
-                p.resizeCanvas(mountRef.current.clientWidth, mountRef.current.clientHeight);
-            }
-        };
+    const handleResize = () => {
+        if (!mountRef.current || !camera || !renderer || !composer) return;
+        const width = mountRef.current.clientWidth;
+        const height = mountRef.current.clientHeight;
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
+        composer.setSize(width, height);
     };
 
+    window.addEventListener('resize', handleResize);
+
+    initGeometryData();
     setupMediaPipe();
-    
-    // Initialize p5 instance
-    if (mountRef.current) {
-        p5InstanceRef.current = new p5(Sketch, mountRef.current);
-    }
+    initThree();
 
     return () => {
-      cancelAnimationFrame(requestAnimId);
-      if (p5InstanceRef.current) {
-          p5InstanceRef.current.remove();
-      }
-      if (videoRef.current && videoRef.current.srcObject) {
-          const stream = videoRef.current.srcObject as MediaStream;
-          stream.getTracks().forEach(track => track.stop());
-      }
+        cancelAnimationFrame(animationId);
+        window.removeEventListener('resize', handleResize);
+        if (videoRef.current && videoRef.current.srcObject) {
+            (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
+        }
+        if (mountRef.current && renderer) {
+            mountRef.current.removeChild(renderer.domElement);
+            renderer.dispose();
+            if (composer) composer.dispose();
+            if (particles) {
+                particles.geometry.dispose();
+                (particles.material as THREE.Material).dispose();
+            }
+        }
     };
   }, []);
 
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-        mountRef.current?.requestFullscreen();
-        setIsFullscreen(true);
-    } else {
-        document.exitFullscreen();
-        setIsFullscreen(false);
-    }
-  };
-
   return (
-    <div className="fixed inset-0 z-50 bg-black flex flex-col">
+    <div className="fixed inset-0 z-50 bg-black text-white font-sans select-none">
        {/* Hidden Video for MediaPipe */}
        <video ref={videoRef} className="absolute opacity-0 pointer-events-none w-1 h-1" autoPlay playsInline muted></video>
 
+       {/* Loading Overlay */}
+       {loading && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center z-50 bg-black/90">
+                <div className="w-12 h-12 border-4 border-t-cyan-400 border-white/20 rounded-full animate-spin mb-4"></div>
+                <div className="text-cyan-400 tracking-[0.3em] text-sm animate-pulse">INITIALIZING NEURAL LINK...</div>
+            </div>
+       )}
+       
+       {/* Error Overlay */}
+       {error && (
+           <div className="absolute inset-0 flex flex-col items-center justify-center z-50 bg-black/90">
+               <div className="text-red-500 font-bold mb-4">{error}</div>
+               <button onClick={onBack} className="px-4 py-2 border border-white/20 rounded hover:bg-white/10">Back</button>
+           </div>
+       )}
+
        {/* Canvas Container */}
-       <div ref={mountRef} className="flex-grow w-full h-full relative overflow-hidden bg-gradient-to-b from-gray-900 via-black to-gray-900">
-          
-          {/* HUD Overlay */}
-          <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-10 pointer-events-none">
-             <div>
-                <button 
-                    onClick={onBack}
-                    className="pointer-events-auto flex items-center gap-2 text-white/70 hover:text-white bg-white/5 hover:bg-white/10 px-4 py-2 rounded-full backdrop-blur-md border border-white/10 transition-all"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-                    </svg>
-                    Back to Editor
-                </button>
-                <div className="mt-4">
-                    <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-500" style={{ filter: 'drop-shadow(0 0 10px rgba(0,255,255,0.3))' }}>
-                        Digital String Figures
-                    </h1>
-                    <p className="text-sm text-gray-400 flex items-center gap-2 mt-1">
-                        {loading ? 'Initializing Vision AI...' : handDetected ? (
-                            <span className="text-cyan-400 flex items-center gap-1">
-                                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_currentColor]"></span> 
-                                System Online: Tracking
-                            </span>
-                        ) : (
-                            <span className="text-pink-500 flex items-center gap-1">
-                                <span className="w-2 h-2 rounded-full bg-pink-500 animate-ping"></span> 
-                                Waiting for Two Hands...
-                            </span>
-                        )}
-                    </p>
-                </div>
-             </div>
+       <div ref={mountRef} className="w-full h-full cursor-none"></div>
 
-             <div className="pointer-events-auto flex flex-col gap-3 items-end">
-                <button 
-                    onClick={toggleFullscreen}
-                    className="p-3 bg-white/10 hover:bg-white/20 rounded-full text-white backdrop-blur-md border border-white/10 transition-all hover:scale-105"
-                    title="Fullscreen"
-                >
-                     {isFullscreen ? (
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5M15 15l5.25 5.25" />
-                        </svg>
-                     ) : (
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
-                        </svg>
-                     )}
-                </button>
-             </div>
-          </div>
-
-          {/* Controls Panel */}
-          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-3xl px-6 pointer-events-none">
-              <div className="bg-black/60 backdrop-blur-2xl border border-white/10 rounded-2xl p-6 pointer-events-auto shadow-[0_0_40px_rgba(0,0,0,0.5)] flex flex-col gap-4">
-                  
-                  <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-                      
-                      {/* Model Selector */}
-                      <div className="flex flex-col gap-2">
-                          <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Hand Model</span>
-                          <div className="flex bg-white/5 rounded-lg p-1 border border-white/5">
-                              {['cyber', 'skeleton', 'stardust'].map(style => (
-                                <button 
-                                    key={style}
-                                    onClick={() => setHandStyle(style as any)}
-                                    className={`px-5 py-2 rounded-md text-sm font-bold transition-all uppercase ${handStyle === style ? 'bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-lg shadow-cyan-500/20 scale-105' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
-                                >
-                                    {style}
-                                </button>
-                              ))}
-                          </div>
-                      </div>
-
-                      {/* Divider */}
-                      <div className="w-px h-12 bg-white/10 hidden md:block"></div>
-
-                      {/* Color Picker */}
-                      <div className="flex flex-col gap-2">
-                          <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Energy Core</span>
-                          <div className="flex gap-3">
-                              {['#00ffff', '#ff00ff', '#55ff00', '#ffaa00', '#ffffff'].map((c) => (
-                                  <button
-                                    key={c}
-                                    onClick={() => setColor(c)}
-                                    className={`w-10 h-10 rounded-full border-2 transition-all duration-300 hover:scale-110 relative group ${color === c ? 'border-white scale-110 shadow-[0_0_20px_currentColor]' : 'border-white/10 opacity-60 hover:opacity-100 hover:border-white/50'}`}
-                                    style={{ backgroundColor: c, color: c }}
-                                  >
-                                      {color === c && <div className="absolute inset-0 rounded-full bg-white opacity-20 animate-ping"></div>}
-                                  </button>
-                              ))}
-                          </div>
-                      </div>
-                  </div>
-                  
-                  <div className="pt-3 border-t border-white/10 text-center">
-                      <p className="text-xs text-cyan-200/60 font-mono tracking-wider">
-                          Bring both hands into view to activate the Neural String Interface
-                      </p>
-                  </div>
-              </div>
-          </div>
+       {/* UI Overlay */}
+       <div className="absolute bottom-8 left-0 w-full text-center pointer-events-none">
+            <p className="text-white/70 text-xs tracking-[0.2em] uppercase drop-shadow-[0_0_10px_rgba(0,255,255,0.5)]">
+                <span className="text-cyan-400 font-bold">Pinch</span> to Morph Shape &nbsp;|&nbsp; <span className="text-cyan-400 font-bold">Move Hand</span> to Rotate
+            </p>
        </div>
+
+       {/* Exit Button */}
+       <button 
+          onClick={onBack}
+          className="absolute top-8 left-8 text-white/50 hover:text-white transition-colors flex items-center gap-2 z-40 bg-black/20 p-2 rounded-full backdrop-blur-sm border border-white/10"
+       >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+          </svg>
+          <span className="text-xs uppercase tracking-widest pr-2">Exit</span>
+       </button>
     </div>
   );
 };
