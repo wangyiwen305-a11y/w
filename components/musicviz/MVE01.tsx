@@ -18,7 +18,7 @@ const Icons = {
     Plus: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
 };
 
-// --- CHAOS GLITCH SHADER V6 (Wide Data Moshing) ---
+// --- CHAOS GLITCH SHADER V6 (Peach/White Short Circuit) ---
 const ChaosGlitchShader = {
     uniforms: {
         "tDiffuse": { value: null },
@@ -62,20 +62,14 @@ const ChaosGlitchShader = {
             // INTENSITY CONTROL
             float totalGlitch = amount * 0.3 + beat * 0.9; 
             
-            // 1. DATA MOSHING (Wide Macroblock Displacement)
+            // 1. DATA MOSHING (Macroblock Displacement)
             if (beat > 0.4) {
-                // To stretch horizontally, use fewer subdivisions in X (low val) and more in Y (high val)
-                float blockX = 2.0 + (1.0-beat) * 10.0;  // Very wide blocks
-                float blockY = 40.0 + (1.0-beat) * 60.0; // Thin strips
-                vec2 blockScale = vec2(blockX, blockY);
+                float blockSize = 20.0 + (1.0-beat) * 50.0; // Variable block size
+                vec2 blocks = floor(p * blockSize) / blockSize;
+                float flowX = (noise(blocks * 10.0 + time) - 0.5) * 0.1 * beat;
+                float flowY = (noise(blocks * 10.0 + time + 50.0) - 0.5) * 0.1 * beat;
                 
-                vec2 blocks = floor(p * blockScale) / blockScale;
-                
-                // Flow calculation
-                float flowX = (noise(blocks * 5.0 + time) - 0.5) * 0.15 * beat; // Stronger X flow
-                float flowY = (noise(blocks * 5.0 + time + 50.0) - 0.5) * 0.02 * beat; // Weaker Y flow
-                
-                if (rand(blocks + vec2(time)) > 0.6) {
+                if (rand(blocks + time) > 0.6) {
                     p += vec2(flowX, flowY);
                 }
             }
@@ -98,15 +92,28 @@ const ChaosGlitchShader = {
             vec3 col = vec3(r.r, g.g, b.b);
 
             // 4. SHORT CIRCUIT / SYSTEM FAILURE FLASH (Peach/White)
+            // Triggered on heavy beats (flash > 0.5)
             if (flash > 0.5) {
+                // Strobe logic: alternate between frames
                 float strobe = step(0.5, sin(time * 60.0)); 
-                vec3 peach = vec3(1.0, 0.85, 0.8);
+                
+                // Color Palette: Peach Pink and Pure White
+                vec3 peach = vec3(1.0, 0.85, 0.8); // Peach/Pinkish White
                 vec3 white = vec3(1.0, 1.0, 1.0);
+                
+                // Mix based on strobe
                 vec3 failColor = mix(peach, white, strobe);
                 
+                // Add horizontal "dead pixel" scanlines
                 float scanline = step(0.3, sin(p.y * 300.0 + time * 50.0));
+                
+                // Invert original image behind the flash for chaos
                 vec3 inverted = 1.0 - col;
+                
+                // Composite: Mostly flash color, but let inverted image show through scanlines
                 col = mix(inverted, failColor, 0.7 + 0.3 * scanline);
+                
+                // Add erratic brightness boost
                 col *= 1.2; 
             }
 
@@ -486,113 +493,6 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
     wireframeBox.visible = false; 
     scene.add(wireframeBox);
 
-    // --- BACKGROUND DYNAMIC LINES (NEW) ---
-    // Creating 3 large vertical curves that segment the background
-    const bgLineGroup = new THREE.Group();
-    const lineCount = 200;
-    const linePos = new Float32Array(lineCount * 3);
-    for(let i=0; i<lineCount; i++) {
-        const y = (i / (lineCount-1)) * 24 - 12; // Span -12 to 12
-        linePos[i*3] = 0; 
-        linePos[i*3+1] = y;
-        linePos[i*3+2] = -5; // Behind main object
-    }
-    const lineGeo = new THREE.BufferGeometry();
-    lineGeo.setAttribute('position', new THREE.BufferAttribute(linePos, 3));
-    
-    const bgLineMaterial = new THREE.ShaderMaterial({
-        uniforms: {
-            uColor: { value: new THREE.Color(0xffffff) },
-            uTime: { value: 0 },
-            uBeat: { value: 0 },
-            uShapeId: { value: 0.0 }, // Maps to active shape
-            uLineIndex: { value: 0.0 }
-        },
-        vertexShader: `
-            uniform float uTime;
-            uniform float uBeat;
-            uniform float uShapeId;
-            uniform float uLineIndex;
-            varying float vY;
-            
-            void main() {
-                vec3 pos = position;
-                float yNorm = pos.y / 10.0; // Normalize approx -1 to 1
-                vY = yNorm;
-                
-                float curve = 0.0;
-                
-                // --- DYNAMIC CURVE FUNCTIONS ---
-                
-                // 0: Signature/Sphere -> Gentle symmetric bow
-                if (uShapeId < 0.5) {
-                    curve = sin(yNorm * 3.14) * 4.0;
-                } 
-                // 1: Ripple -> Sine Wave
-                else if (uShapeId < 1.5) {
-                    curve = sin(yNorm * 8.0 + uTime) * 2.0;
-                }
-                // 2: Lorenz -> Chaotic Tangent-like arc
-                else if (uShapeId < 2.5) {
-                    curve = tan(yNorm * 1.5 + uTime * 0.2) * 1.5;
-                    curve = clamp(curve, -6.0, 6.0);
-                }
-                // 3: Menger -> Sharp ZigZag (approx with high freq)
-                else if (uShapeId < 3.5) {
-                    curve = asin(sin(yNorm * 10.0)) * 2.0;
-                }
-                // 4: Galaxy -> Spiral twist offset
-                else if (uShapeId < 4.5) {
-                    curve = yNorm * 6.0 * sin(uTime * 0.5);
-                }
-                // 5: Strobe -> Jittery noise line
-                else if (uShapeId < 5.5) {
-                    curve = (fract(sin(dot(vec2(yNorm, uTime), vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * 1.0;
-                }
-                // 6: Penrose -> geometric V shape
-                else {
-                    curve = abs(yNorm) * 6.0 - 3.0;
-                }
-                
-                // Spread lines horizontally: Left, Center, Right
-                float offset = (uLineIndex - 1.0) * 9.0; 
-                
-                // Apply curve and beat pulse
-                pos.x += curve + offset + sin(yNorm * 20.0 + uTime * 5.0) * 0.1 * uBeat;
-                
-                // Gentle swaying
-                pos.x += sin(uTime * 0.5 + uLineIndex) * 0.5;
-
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-            }
-        `,
-        fragmentShader: `
-            uniform vec3 uColor;
-            varying float vY;
-            void main() {
-                // Fade out at top/bottom ends
-                float alpha = 1.0 - abs(vY);
-                alpha = pow(alpha, 0.5);
-                gl_FragColor = vec4(uColor, alpha * 0.3); // Subtle white
-            }
-        `,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending
-    });
-
-    // Add 3 separate lines
-    const bgLines: THREE.Line[] = [];
-    for(let k=0; k<3; k++) {
-        const matClone = bgLineMaterial.clone();
-        matClone.uniforms = THREE.UniformsUtils.clone(bgLineMaterial.uniforms);
-        matClone.uniforms.uLineIndex.value = k;
-        const mesh = new THREE.Line(lineGeo, matClone);
-        bgLineGroup.add(mesh);
-        bgLines.push(mesh);
-    }
-    scene.add(bgLineGroup);
-
     // --- PARTICLE SHADER MATERIAL ---
     const material = new THREE.ShaderMaterial({
         uniforms: {
@@ -738,8 +638,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
 
     sceneRef.current = { 
         scene, camera, renderer, particles, material, composer, glitchPass, 
-        targetPositions, geometry, bloomPass, wireframeBox, textParticles, textMaterial,
-        bgLines // Store refs to lines to update uniforms
+        targetPositions, geometry, bloomPass, wireframeBox, textParticles, textMaterial 
     };
     setLoading(false);
 
@@ -839,16 +738,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             }
         }
 
-        // 6. Update Background Lines Uniforms
-        if (sceneRef.current.bgLines) {
-            sceneRef.current.bgLines.forEach((line: THREE.Line) => {
-                const mat = line.material as THREE.ShaderMaterial;
-                mat.uniforms.uTime.value = time;
-                mat.uniforms.uBeat.value = nBass;
-            });
-        }
-
-        // 7. Morphing
+        // 6. Morphing
         const currentPositions = geometry.attributes.position.array as Float32Array;
         const targets = sceneRef.current.targetPositions;
         const morphSpeed = 3.0 * delta;
@@ -1043,27 +933,6 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
       if (!sceneRef.current.targetPositions) return;
       setActiveShape(shapeKey);
       
-      let shapeId = 0.0;
-      let name = "";
-      
-      if (shapeKey === 'signature') { shapeId = 0.0; name = "专属声纹"; }
-      else if (shapeKey === 'ripple') { shapeId = 1.0; name = "Sonic Ripple (Wave)"; }
-      else if (shapeKey === 'lorenz') { shapeId = 2.0; name = "Thomas Attractor (Complex)"; }
-      else if (shapeKey === 'menger') { shapeId = 3.0; name = "Menger Cage (Squeezed)"; }
-      else if (shapeKey === 'galaxy') { shapeId = 4.0; name = "时空光轮 (Chronos)"; }
-      else if (shapeKey === 'strobe') { shapeId = 5.0; name = "Fractal Torus (Strobe)"; }
-      else if (shapeKey === 'penrose') { shapeId = 6.0; name = "Orb Web (Spider)"; }
-      else { name = "未知结构"; }
-
-      setCurrentShapeName(name);
-
-      // Update background lines shape uniform
-      if (sceneRef.current.bgLines) {
-          sceneRef.current.bgLines.forEach((line: THREE.Line) => {
-              (line.material as THREE.ShaderMaterial).uniforms.uShapeId.value = shapeId;
-          });
-      }
-
       if (sceneRef.current.wireframeBox) {
           sceneRef.current.wireframeBox.visible = (shapeKey === 'menger');
       }
@@ -1071,11 +940,23 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
           sceneRef.current.material.uniforms.isRipple.value = (shapeKey === 'ripple') ? 1.0 : 0.0;
       }
 
+      let name = "";
       if (shapeKey === 'signature' && playlist[currentSongIndex]) {
           sceneRef.current.targetPositions.set(generateShape('signature', playlist[currentSongIndex].name));
+          name = "专属声纹";
       } else if (shapes[shapeKey as keyof typeof shapes]) {
           sceneRef.current.targetPositions.set(generateShape(shapeKey));
+          switch(shapeKey) {
+              case 'lorenz': name = "Thomas Attractor (Complex)"; break;
+              case 'galaxy': name = "时空光轮 (Chronos)"; break;
+              case 'strobe': name = "Fractal Torus (Strobe)"; break;
+              case 'menger': name = "Menger Cage (Squeezed)"; break;
+              case 'penrose': name = "Orb Web (Spider)"; break;
+              case 'ripple': name = "Sonic Ripple (Wave)"; break;
+              default: name = "未知结构";
+          }
       }
+      setCurrentShapeName(name);
   };
 
   useEffect(() => {
