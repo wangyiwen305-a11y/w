@@ -18,13 +18,13 @@ const Icons = {
     Plus: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
 };
 
-// --- CHAOS GLITCH SHADER V5 (Short Circuit Failure Added) ---
+// --- CHAOS GLITCH SHADER V3 (Beat Flash Added) ---
 const ChaosGlitchShader = {
     uniforms: {
         "tDiffuse": { value: null },
         "amount": { value: 0.0 }, 
         "beat": { value: 0.0 },   
-        "flash": { value: 0.0 }, 
+        "flash": { value: 0.0 }, // New: Controlled by heavy beats
         "time": { value: 0.0 },
         "speed": { value: 1.0 }
     },
@@ -62,27 +62,27 @@ const ChaosGlitchShader = {
             // INTENSITY CONTROL
             float totalGlitch = amount * 0.3 + beat * 0.9; 
             
-            // 1. DATA MOSHING (Macroblock Displacement)
-            if (beat > 0.4) {
-                float blockSize = 20.0 + (1.0-beat) * 50.0; // Variable block size
-                vec2 blocks = floor(p * blockSize) / blockSize;
-                float flowX = (noise(blocks * 10.0 + time) - 0.5) * 0.1 * beat;
-                float flowY = (noise(blocks * 10.0 + time + 50.0) - 0.5) * 0.1 * beat;
-                
-                if (rand(blocks + time) > 0.6) {
-                    p += vec2(flowX, flowY);
-                }
-            }
-
-            // 2. HORIZONTAL SLICE OFFSET
+            // 1. HORIZONTAL SLICE OFFSET (New: Sharp lateral cuts)
             if (beat > 0.6) {
-                float slice = step(0.9, sin(p.y * 50.0 + time * 20.0)); 
+                float slice = step(0.9, sin(p.y * 50.0 + time * 20.0)); // Create bands
                 float offset = (rand(vec2(time, floor(p.y * 20.0))) - 0.5) * 0.1 * slice;
                 p.x += offset;
             }
 
-            // 3. RGB SPLIT
+            // 2. DATA MOSHING / BLOCK DISPLACEMENT
+            float blockScale = 10.0 + floor(rand(vec2(time*0.1)) * 20.0);
+            vec2 block = floor(p * blockScale) / blockScale;
+            float blockNoise = noise(vec2(block.y + time * 5.0, block.x));
+            
+            if (totalGlitch > 0.1 && blockNoise > (0.9 - totalGlitch * 0.5)) {
+                float shift = (rand(vec2(time, block.y)) - 0.5) * totalGlitch * 0.4;
+                p.x += shift;
+            }
+
+            // 3. RGB SPLIT + FLASH ABERRATION
             float rgbOffset = 0.002 + totalGlitch * 0.03; 
+            
+            // On heavy flash, increase offset massively
             if (flash > 0.1) rgbOffset += 0.05 * flash;
 
             vec4 r = texture2D(tDiffuse, p + vec2(rgbOffset, 0.0));
@@ -91,34 +91,15 @@ const ChaosGlitchShader = {
             
             vec3 col = vec3(r.r, g.g, b.b);
 
-            // 4. SHORT CIRCUIT / SYSTEM FAILURE FLASH (Major Beat Impact)
-            // Triggered on heavy beats (flash > 0.5)
+            // 4. BEAT FLASH / INVERSION
+            // If flash is high, either invert colors or blow out brightness
             if (flash > 0.5) {
-                float rnd = rand(vec2(time, 10.0));
-                
-                // EFFECT A: INVERTED NEGATIVE FLASH (Simulate voltage spike)
-                // This turns the black background white/colored, creating a massive flash
-                if (rnd > 0.4) {
-                    col = 1.0 - col;
-                    
-                    // Tint the negative image for "System Critical" feel
-                    vec3 tint = vec3(1.0);
-                    float tintRnd = rand(vec2(time, 20.0));
-                    
-                    if (tintRnd < 0.33) tint = vec3(1.0, 0.2, 0.2); // CRITICAL RED
-                    else if (tintRnd < 0.66) tint = vec3(0.2, 1.0, 1.0); // SYSTEM CYAN
-                    else tint = vec3(0.2, 1.0, 0.2); // BIOS GREEN
-                    
-                    col = mix(col, col * tint, 0.8);
-                } 
-                // EFFECT B: BRIGHTNESS SURGE
-                else {
-                    col += vec3(0.6 * flash);
-                }
-                
-                // Add "Bad Connection" signal dropout lines (Black bars)
-                if (rand(vec2(p.y * 10.0, time)) > 0.8) {
-                    col = vec3(0.0); 
+                // Occasional Inversion
+                if (mod(time * 20.0, 2.0) > 1.0) {
+                    col = 1.0 - col; 
+                } else {
+                    // Blowout
+                    col += vec3(0.4 * flash);
                 }
             }
 
@@ -126,7 +107,7 @@ const ChaosGlitchShader = {
             float staticNoise = rand(p + vec2(time)) * 0.15 * totalGlitch;
             col += staticNoise;
             
-            // 6. VIGNETTE
+            // 6. VIGNETTE (Reduced during flash)
             float vign = length(vUv - 0.5);
             col *= 1.0 - vign * 0.4 * (1.0 - flash);
 
@@ -158,7 +139,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
   const [panelVisible, setPanelVisible] = useState(true);
   const [panelMinimized, setPanelMinimized] = useState(false);
   
-  // Visual Params
+  // Visual Params - INCREASED DEFAULT SIZE FOR CLARITY
   const [particleSize, setParticleSize] = useState(0.06); 
   const [colorTheme, setColorTheme] = useState('#7A7171'); 
   const [sensitivity, setSensitivity] = useState(2.0);
@@ -174,14 +155,13 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const dataArrayRef = useRef<Uint8Array | null>(null);
-  const flashValueRef = useRef(0.0);
+  const flashValueRef = useRef(0.0); // For handling flash decay
   
   // Interaction State
   const handRef = useRef({
       rotation: { x: 0, y: 0 },
       zoom: 1.0,
-      isRippleGesture: 0.0, // Left/Right pinch generic
-      zBounce: 0.0,         // NEW: Right hand forward/back bounce
+      isRippleGesture: 0.0, // 0 to 1 float
       isDetectingLeft: false,
       isDetectingRight: false
   });
@@ -191,6 +171,8 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
   
   const generateShape = (type: string, seedString?: string): Float32Array => {
       const arr = new Float32Array(PARTICLE_COUNT * 3);
+      
+      // REDUCED SCALE TO FIT SCREEN
       const SCALE = 1.1; 
 
       if (type === 'signature' && seedString) {
@@ -278,9 +260,11 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
           let idx = 0;
           const torusRadius = 2.5 * SCALE;
           const tubeRadius = 0.8 * SCALE;
-          const p = 3; const q = 2;
+          const p = 3; 
+          const q = 2;
           const strands = 12;
           const particlesPerStrand = Math.floor(PARTICLE_COUNT / strands);
+          
           for (let s = 0; s < strands; s++) {
               const strandOffset = (s / strands) * Math.PI * 2;
               for (let i = 0; i < particlesPerStrand; i++) {
@@ -311,62 +295,108 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
               arr[idx*3+2] = r * Math.cos(phi);
               idx++;
           }
+
       } else if (type === 'penrose') {
           // --- IRREGULAR NATURAL SPIDER WEB ---
+          // Creates a web with varying spoke lengths and non-circular spirals
+          
           let idx = 0;
-          const numRadials = 11 + Math.floor(Math.random() * 4); 
+          
+          // 1. Setup Irregular Spokes (Radials)
+          const numRadials = 11 + Math.floor(Math.random() * 4); // Randomize spoke count (11-14)
           const radials: { angle: number, length: number }[] = [];
+          
           let currentAngle = 0;
           for (let i = 0; i < numRadials; i++) {
+              // Add randomness to angle spacing
               const slice = (Math.PI * 2) / numRadials;
               currentAngle += slice + (Math.random() - 0.5) * 0.5;
+              
+              // Key change: Randomize length significantly to create "pulled" shape
               const len = (2.5 + Math.random() * 3.5) * SCALE; 
+              
               radials.push({ angle: currentAngle, length: len });
           }
+
+          // 2. Draw Spokes
           for (let r = 0; r < numRadials; r++) {
               const { angle, length } = radials[r];
               const particlesInSpoke = 80;
+              
               for (let p = 0; p < particlesInSpoke; p++) {
                   if (idx >= PARTICLE_COUNT) break;
+                  
+                  // Non-linear distribution: denser near center
                   const t = p / particlesInSpoke;
                   const dist = t * length; 
+                  
                   arr[idx*3] = dist * Math.cos(angle);
                   arr[idx*3+1] = dist * Math.sin(angle);
-                  arr[idx*3+2] = (Math.random()-0.5) * 0.05; 
+                  arr[idx*3+2] = (Math.random()-0.5) * 0.05; // Flat Z
                   idx++;
               }
           }
-          const spiralLoops = 30; 
+          
+          // 3. Draw Adaptive Spirals (Bridge threads)
+          // Instead of circles, we draw lines connecting adjacent spokes at proportional distances
+          const spiralLoops = 30; // High density of threads
           const remaining = PARTICLE_COUNT - idx;
           const particlesPerLoop = Math.floor(remaining / spiralLoops);
+          
           for (let loop = 1; loop < spiralLoops; loop++) {
-              const progress = loop / spiralLoops; 
+              const progress = loop / spiralLoops; // 0 (center) to 1 (edge)
+              
+              // Iterate through segments between spokes
               for (let r = 0; r < numRadials; r++) {
                   const r1 = radials[r];
-                  const r2 = radials[(r + 1) % numRadials]; 
+                  const r2 = radials[(r + 1) % numRadials]; // Wrap around
+                  
+                  // The radius at the start and end of this thread segment
+                  // This is the key: radius depends on spoke length!
                   const radStart = progress * r1.length;
                   const radEnd = progress * r2.length;
+                  
+                  // Angles
                   let a1 = r1.angle;
                   let a2 = r2.angle;
-                  if (a2 < a1) a2 += Math.PI * 2; 
+                  if (a2 < a1) a2 += Math.PI * 2; // Handle wrap
+                  
                   const segmentParticles = Math.floor(particlesPerLoop / numRadials);
+                  
                   for (let s = 0; s < segmentParticles; s++) {
                       if (idx >= PARTICLE_COUNT) break;
-                      const t = s / segmentParticles; 
+                      
+                      const t = s / segmentParticles; // 0 to 1 along the bridge thread
+                      
+                      // Interpolate angle
                       const curAngle = a1 + t * (a2 - a1);
+                      
+                      // Interpolate base radius (Linear approximation of a straight line in polar)
+                      // This draws a "straight" line between the two points on the spokes
                       const curRadiusBase = radStart + t * (radEnd - radStart);
+                      
+                      // ADD SAG (Gravity dip)
+                      // Sag is stronger further out and in the middle of the segment
                       const spanDist = curRadiusBase * (a2 - a1);
                       const sagAmt = spanDist * 0.25; 
                       const sag = sagAmt * Math.sin(t * Math.PI); 
+                      
                       const rFinal = curRadiusBase - sag;
+                      
+                      // Add "Dew Drops" / Knots - occasional sticky particles
                       const noise = Math.random() > 0.92 ? 0.08 : 0.01;
+                      
                       arr[idx*3] = rFinal * Math.cos(curAngle) + (Math.random()-0.5)*noise;
                       arr[idx*3+1] = rFinal * Math.sin(curAngle) + (Math.random()-0.5)*noise;
+                      
+                      // Slight Z-wave for depth
                       arr[idx*3+2] = Math.sin(rFinal * 1.5 + loop) * 0.15; 
                       idx++;
                   }
               }
           }
+          
+          // Fill any remaining particles in the center core
           while (idx < PARTICLE_COUNT) {
               const r = Math.random() * 0.3 * SCALE;
               const theta = Math.random() * Math.PI * 2;
@@ -471,8 +501,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             beat: { value: 0.0 }, 
             distortion: { value: 0.0 },
             isRipple: { value: 0.0 },
-            gestureIntensity: { value: 0.0 },
-            zBounce: { value: 0.0 } // NEW: 3D Bounce Intensity
+            gestureIntensity: { value: 0.0 }
         },
         vertexShader: `
             uniform float size;
@@ -481,7 +510,6 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             uniform float distortion;
             uniform float isRipple;
             uniform float gestureIntensity;
-            uniform float zBounce; 
             varying float vDist;
             
             float rand(vec3 co){ return fract(sin(dot(co.xyz ,vec3(12.9898,78.233,45.543))) * 43758.5453); }
@@ -501,6 +529,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                 }
                 
                 // 3. PHYSICAL GLITCH (Quantum Jitter)
+                // Randomly offset particles horizontally on strong beats
                 if (beat > 0.5) {
                     float jitter = sin(pos.y * 50.0 + time * 40.0) * 0.1 * beat;
                     pos.x += jitter;
@@ -510,21 +539,6 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                 if (gestureIntensity > 0.0) {
                     float jitter = sin(pos.y * 50.0 + time * 30.0) * cos(pos.x * 50.0);
                     pos += normal * jitter * gestureIntensity * 0.4;
-                }
-
-                // 5. PARTICLE EXPLOSION (Right Hand Hollow Circle)
-                // Expands particles radially outwards with noise to simulate shattering
-                if (zBounce > 0.0) {
-                    // Direction from center (or use 0,1,0 if at center)
-                    vec3 explosionDir = normalize(pos);
-                    if (length(pos) < 0.001) explosionDir = vec3(0.0, 1.0, 0.0);
-
-                    // Scatter effect: randomization based on original position
-                    float scatter = rand(position + time) * 0.5 + 0.5;
-                    
-                    // Apply outward explosion
-                    // Multiplier tuned for visible "shattering" effect
-                    pos += explosionDir * zBounce * scatter * 15.0; 
                 }
 
                 vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
@@ -638,12 +652,6 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             material.uniforms.gestureIntensity.value, 
             handRef.current.isRippleGesture, 
             0.2
-        );
-        // Apply Z Bounce smoothing (Explosion intensity)
-        material.uniforms.zBounce.value = THREE.MathUtils.lerp(
-            material.uniforms.zBounce.value,
-            handRef.current.zBounce,
-            0.15
         );
 
         // 4. Update GLITCH Uniforms (Intense & Reactive)
@@ -761,40 +769,19 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                           handRef.current.zoom = minScale + normalized * (maxScale - minScale);
                       } 
                       
-                      // RIGHT HAND
+                      // RIGHT HAND: Rotation & Ripple
                       if (handedness === "Right") {
                           foundRight = true;
-                          const thumbTip = landmarks[4];
                           const indexTip = landmarks[8];
                           const middleTip = landmarks[12];
-                          const wrist = landmarks[0];
-                          const middleBase = landmarks[9]; // Middle Finger MCP
                           
-                          // 1. Rotation (Index Finger Position)
+                          // Rotation (INCREASED SENSITIVITY from 8.0 to 15.0)
                           handRef.current.rotation.y = (indexTip.x - 0.5) * 15.0; 
                           handRef.current.rotation.x = (indexTip.y - 0.5) * 15.0; 
                           
-                          // 2. Ripple/Glitch (Index & Middle pinch)
+                          // Ripple (Pinch) - Eased threshold from 0.05 to 0.08
                           const fingersDist = Math.hypot(indexTip.x - middleTip.x, indexTip.y - middleTip.y);
                           handRef.current.isRippleGesture = (fingersDist < 0.08) ? 1.0 : 0.0;
-
-                          // 3. 3D Bounce / Explosion (Thumb & Index Hollow Circle Pinch)
-                          const pinchDist = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
-                          const isHollowCircle = pinchDist < 0.06; // Threshold for pinch/circle
-
-                          if (isHollowCircle) {
-                              // Estimate "Z-Depth" using visual scale of hand on screen
-                              // Distance between Wrist(0) and Middle MCP(9) is a stable metric for hand size
-                              const handScale = Math.hypot(wrist.x - middleBase.x, wrist.y - middleBase.y);
-                              
-                              // Normalize based on typical hand scale range
-                              // Map scale to a positive expansion multiplier
-                              // handScale typically 0.1 (far) to 0.3 (close)
-                              const zVal = Math.max(0, (handScale - 0.15) * 5.0);
-                              handRef.current.zBounce = zVal; 
-                          } else {
-                              handRef.current.zBounce = 0.0; // Reset if gesture broken
-                          }
                       }
                   }
               }
