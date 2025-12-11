@@ -1,3 +1,5 @@
+
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -6,12 +8,26 @@
 import React, { useState } from 'react';
 import { UploadIcon, MagicWandIcon, PaletteIcon, SunIcon, HandIcon } from './icons';
 
+// Custom Fan Icon
+const FanIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9-4.03-9-9-9zM12 12l4-4m-4 4l4 4m-4-4l-4-4m4 4l-4 4" />
+  </svg>
+);
+
+// Music Icon
+const MusicNoteIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+  </svg>
+);
+
 interface StartScreenProps {
   onFileSelect: (files: FileList | null) => void;
-  onEnter3DMode: () => void;
+  onSelectMode: (mode: 'particles' | 'fan' | 'musicviz') => void;
 }
 
-const StartScreen: React.FC<StartScreenProps> = ({ onFileSelect, onEnter3DMode }) => {
+const StartScreen: React.FC<StartScreenProps> = ({ onFileSelect, onSelectMode }) => {
   const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -49,13 +65,31 @@ const StartScreen: React.FC<StartScreenProps> = ({ onFileSelect, onEnter3DMode }
 
             <span className="text-gray-600 font-semibold">- OR -</span>
 
-            <button 
-                onClick={onEnter3DMode}
-                className="relative inline-flex items-center justify-center px-10 py-5 text-xl font-bold text-white bg-purple-600 rounded-full cursor-pointer group hover:bg-purple-500 transition-colors shadow-lg shadow-purple-500/20"
-            >
-                <HandIcon className="w-6 h-6 mr-3 transition-transform duration-300 group-hover:-translate-y-1" />
-                Live 3D Particles
-            </button>
+            <div className="flex flex-wrap justify-center gap-4">
+                <button 
+                    onClick={() => onSelectMode('particles')}
+                    className="relative inline-flex items-center justify-center px-6 py-5 text-lg font-bold text-white bg-purple-600 rounded-full cursor-pointer group hover:bg-purple-500 transition-colors shadow-lg shadow-purple-500/20"
+                >
+                    <HandIcon className="w-5 h-5 mr-2 transition-transform duration-300 group-hover:-translate-y-1" />
+                    Particles
+                </button>
+                
+                <button 
+                    onClick={() => onSelectMode('fan')}
+                    className="relative inline-flex items-center justify-center px-6 py-5 text-lg font-bold text-gray-900 bg-amber-500 rounded-full cursor-pointer group hover:bg-amber-400 transition-colors shadow-lg shadow-amber-500/20"
+                >
+                    <FanIcon className="w-5 h-5 mr-2 transition-transform duration-300 group-hover:rotate-180" />
+                    Ink Fan
+                </button>
+                
+                <button 
+                    onClick={() => onSelectMode('musicviz')}
+                    className="relative inline-flex items-center justify-center px-6 py-5 text-lg font-bold text-white bg-cyan-600 rounded-full cursor-pointer group hover:bg-cyan-500 transition-colors shadow-lg shadow-cyan-500/20"
+                >
+                    <MusicNoteIcon className="w-5 h-5 mr-2 transition-transform duration-300 group-hover:scale-110" />
+                    Music Viz
+                </button>
+            </div>
         </div>
 
         <div className="mt-16 w-full">

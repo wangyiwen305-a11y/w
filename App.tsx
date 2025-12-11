@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -15,6 +16,8 @@ import CropPanel from './components/CropPanel';
 import { UndoIcon, RedoIcon, EyeIcon } from './components/icons';
 import StartScreen from './components/StartScreen';
 import ParticleExperience from './components/ParticleExperience';
+import FanExperience from './components/FanExperience';
+import MusicVizExperience from './components/musicviz/MusicVizExperience';
 
 // Helper to convert a data URL string to a File object
 const dataURLtoFile = (dataurl: string, filename: string): File => {
@@ -34,9 +37,11 @@ const dataURLtoFile = (dataurl: string, filename: string): File => {
 }
 
 type Tab = 'retouch' | 'adjust' | 'filters' | 'crop';
+type AppMode = 'editor' | 'particles' | 'fan' | 'musicviz';
 
 const App: React.FC = () => {
-  const [is3DMode, setIs3DMode] = useState(false);
+  const [appMode, setAppMode] = useState<AppMode>('editor');
+  
   const [history, setHistory] = useState<File[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const [prompt, setPrompt] = useState<string>('');
@@ -103,6 +108,7 @@ const App: React.FC = () => {
     setActiveTab('retouch');
     setCrop(undefined);
     setCompletedCrop(undefined);
+    setAppMode('editor');
   }, []);
 
   const handleGenerate = useCallback(async () => {
@@ -259,6 +265,7 @@ const App: React.FC = () => {
       setPrompt('');
       setEditHotspot(null);
       setDisplayHotspot(null);
+      setAppMode('editor');
   }, []);
 
   const handleDownload = useCallback(() => {
@@ -317,7 +324,12 @@ const App: React.FC = () => {
     }
     
     if (!currentImageUrl) {
-      return <StartScreen onFileSelect={handleFileSelect} onEnter3DMode={() => setIs3DMode(true)} />;
+      return (
+        <StartScreen 
+            onFileSelect={handleFileSelect} 
+            onSelectMode={(mode) => setAppMode(mode)} 
+        />
+      );
     }
 
     const imageDisplay = (
@@ -495,8 +507,16 @@ const App: React.FC = () => {
     );
   };
   
-  if (is3DMode) {
-      return <ParticleExperience onBack={() => setIs3DMode(false)} />;
+  if (appMode === 'particles') {
+      return <ParticleExperience onBack={() => setAppMode('editor')} />;
+  }
+
+  if (appMode === 'fan') {
+      return <FanExperience onBack={() => setAppMode('editor')} />;
+  }
+
+  if (appMode === 'musicviz') {
+      return <MusicVizExperience onBack={() => setAppMode('editor')} />;
   }
 
   return (
