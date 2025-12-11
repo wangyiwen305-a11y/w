@@ -159,7 +159,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
   const [panelMinimized, setPanelMinimized] = useState(false);
   
   // Visual Params
-  const [particleSize, setParticleSize] = useState(0.06); 
+  const [particleSize, setParticleSize] = useState(0.04); 
   const [colorTheme, setColorTheme] = useState('#7A7171'); 
   const [sensitivity, setSensitivity] = useState(2.0);
   const [exposure, setExposure] = useState(0.1); 
