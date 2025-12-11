@@ -18,12 +18,14 @@ const Icons = {
     Plus: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
 };
 
-// --- ACID GLITCH SHADER (Cleaned Up) ---
-const AcidGlitchShader = {
+// --- CHAOS GLITCH SHADER V2 (More Dynamic) ---
+const ChaosGlitchShader = {
     uniforms: {
         "tDiffuse": { value: null },
-        "amount": { value: 0.0 },
+        "amount": { value: 0.0 }, 
+        "beat": { value: 0.0 },   
         "time": { value: 0.0 },
+        "speed": { value: 1.0 }
     },
     vertexShader: `
         varying vec2 vUv;
@@ -35,49 +37,79 @@ const AcidGlitchShader = {
     fragmentShader: `
         uniform sampler2D tDiffuse;
         uniform float amount;
+        uniform float beat;
         uniform float time;
         varying vec2 vUv;
 
-        float rand(vec2 co){
-            return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
+        // --- Utils ---
+        float rand(vec2 co){ return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453); }
+        
+        float noise(vec2 p) {
+            vec2 ip = floor(p);
+            vec2 u = fract(p);
+            u = u*u*(3.0-2.0*u);
+            float res = mix(
+                mix(rand(ip), rand(ip+vec2(1.0,0.0)), u.x),
+                mix(rand(ip+vec2(0.0,1.0)), rand(ip+vec2(1.0,1.0)), u.x), u.y);
+            return res*res;
         }
 
         void main() {
             vec2 p = vUv;
             
-            // 1. Digital Tearing (More subtle now)
-            if (amount > 0.2) {
-                float slice = floor(p.y * (20.0 + amount * 20.0));
-                float noise = rand(vec2(slice, floor(time * 10.0)));
-                if (noise > 0.92) {
-                    p.x += (noise - 0.5) * amount * 0.15; // Reduced displacement
+            // INTENSITY CONTROL
+            float totalGlitch = amount * 0.3 + beat * 0.9; 
+            
+            // 1. HORIZONTAL SLICE OFFSET (New: Sharp lateral cuts)
+            if (beat > 0.6) {
+                float slice = step(0.9, sin(p.y * 50.0 + time * 20.0)); // Create bands
+                float offset = (rand(vec2(time, floor(p.y * 20.0))) - 0.5) * 0.1 * slice;
+                p.x += offset;
+            }
+
+            // 2. DATA MOSHING / BLOCK DISPLACEMENT
+            float blockScale = 10.0 + floor(rand(vec2(time*0.1)) * 20.0);
+            vec2 block = floor(p * blockScale) / blockScale;
+            float blockNoise = noise(vec2(block.y + time * 5.0, block.x));
+            
+            if (totalGlitch > 0.1 && blockNoise > (0.9 - totalGlitch * 0.5)) {
+                float shift = (rand(vec2(time, block.y)) - 0.5) * totalGlitch * 0.4;
+                p.x += shift;
+            }
+
+            // 3. PIXEL SORTING (Melting)
+            if (beat > 0.4) {
+                float drip = noise(vec2(p.x * 20.0, time)) * beat * 0.15;
+                if (rand(vec2(floor(p.x * 10.0), 0.0)) > 0.5) {
+                    p.y -= drip;
                 }
             }
 
-            // 2. Chromatic Aberration (Tighter)
-            float shift = 0.001 + amount * 0.015; // Much smaller shift
+            // 4. CHROMATIC ABERRATION (RGB Split)
+            float rgbOffset = 0.002 + totalGlitch * 0.03; 
             
-            vec4 r = texture2D(tDiffuse, p + vec2(shift, 0.0));
+            // Add a high frequency jitter to RGB on beat
+            if (beat > 0.5) rgbOffset += 0.01 * sin(time * 50.0);
+
+            vec4 r = texture2D(tDiffuse, p + vec2(rgbOffset, 0.0));
             vec4 g = texture2D(tDiffuse, p);
-            vec4 b = texture2D(tDiffuse, p - vec2(shift, 0.0));
+            vec4 b = texture2D(tDiffuse, p - vec2(rgbOffset, 0.0));
             
             vec3 col = vec3(r.r, g.g, b.b);
 
-            // 3. Contrast (Reduced Crush)
-            // Was 1.5, now 1.1 to keep shadows visible but not pitch black
-            col = pow(col, vec3(1.1)); 
-            
-            // 4. Acid Tint (Rare trigger)
-            if (amount > 0.9 && sin(time * 20.0) > 0.9) {
-                col = 1.0 - col; // Invert
-                col *= 0.8; // Darken the inversion
+            // 5. COLOR INVERSION FLASH
+            // Occasional full invert on massive beats
+            if (beat > 0.9 && rand(vec2(time, 1.0)) > 0.9) {
+                col = 1.0 - col;
             }
 
-            // 5. Scanlines (Subtle)
-            col *= 0.97 + 0.03 * sin(p.y * 1200.0);
+            // 6. DIGITAL NOISE / STATIC
+            float staticNoise = rand(p + vec2(time)) * 0.15 * totalGlitch;
+            col += staticNoise;
             
-            // 6. Noise (Very faint)
-            col += (rand(p * time) - 0.5) * 0.05;
+            // 7. VIGNETTE
+            float vign = length(vUv - 0.5);
+            col *= 1.0 - vign * 0.4 * totalGlitch;
 
             gl_FragColor = vec4(col, 1.0);
         }
@@ -108,10 +140,10 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
   const [panelMinimized, setPanelMinimized] = useState(false);
   
   // Visual Params
-  const [particleSize, setParticleSize] = useState(0.03); 
+  const [particleSize, setParticleSize] = useState(0.04); 
   const [colorTheme, setColorTheme] = useState('#7A7171'); 
   const [sensitivity, setSensitivity] = useState(2.0);
-  const [exposure, setExposure] = useState(0.1); // Reduced default exposure
+  const [exposure, setExposure] = useState(0.1); 
   const [activeShape, setActiveShape] = useState('signature');
   
   const [realTime, setRealTime] = useState("");
@@ -124,10 +156,13 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const dataArrayRef = useRef<Uint8Array | null>(null);
   
+  // Interaction State
   const handRef = useRef({
       rotation: { x: 0, y: 0 },
       zoom: 1.0,
-      isDetecting: false
+      isRippleGesture: 0.0, // 0 to 1 float
+      isDetectingLeft: false,
+      isDetectingRight: false
   });
 
   // --- PARTICLE GENERATION LOGIC ---
@@ -135,7 +170,9 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
   
   const generateShape = (type: string, seedString?: string): Float32Array => {
       const arr = new Float32Array(PARTICLE_COUNT * 3);
-      const SCALE = 1.6; 
+      
+      // REDUCED SCALE TO FIT SCREEN
+      const SCALE = 1.1; 
 
       if (type === 'signature' && seedString) {
           const seededRandom = (str: string) => {
@@ -153,128 +190,88 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
               arr[i*3+2] = r * Math.sin(v) * SCALE;
           }
       } else if (type === 'ripple') {
-          // Ripple / Waveform
           const width = 6.0 * SCALE;
           const depth = 6.0 * SCALE;
           const layers = 15;
           const particlesPerLayer = Math.floor(PARTICLE_COUNT / layers);
-          
           for(let i=0; i<PARTICLE_COUNT; i++) {
               const layerIdx = Math.floor(i / particlesPerLayer);
               const t = (i % particlesPerLayer) / particlesPerLayer;
-              
               const x = (t - 0.5) * width;
               const zBase = (layerIdx / layers - 0.5) * depth;
-              
               const y = Math.sin(x * 2.0 + zBase * 4.0) * 0.5;
-              
-              const noiseX = (Math.random() - 0.5) * 0.1;
-              const noiseY = (Math.random() - 0.5) * 0.1;
-              const noiseZ = (Math.random() - 0.5) * 0.1;
-
-              arr[i*3] = x + noiseX;
-              arr[i*3+1] = y + noiseY; 
-              arr[i*3+2] = zBase + noiseZ;
+              arr[i*3] = x + (Math.random()-0.5)*0.1;
+              arr[i*3+1] = y + (Math.random()-0.5)*0.1; 
+              arr[i*3+2] = zBase + (Math.random()-0.5)*0.1;
           }
       } else if (type === 'lorenz') {
-          // Thomas Attractor
           let x = 0.1, y = 0.1, z = 0.1;
-          const b = 0.19;
-          const dt = 0.05;
-          
+          const b = 0.19, dt = 0.05;
           for(let i=0; i<PARTICLE_COUNT; i++) {
               const dx = Math.sin(y) - b * x;
               const dy = Math.sin(z) - b * y;
               const dz = Math.sin(x) - b * z;
-              
-              x += dx * dt;
-              y += dy * dt;
-              z += dz * dt;
-              
-              arr[i*3] = x * SCALE * 0.8;
+              x += dx * dt; y += dy * dt; z += dz * dt;
+              arr[i*3] = (x - 1.5) * SCALE * 0.8;
               arr[i*3+1] = y * SCALE * 0.8;
               arr[i*3+2] = z * SCALE * 0.8;
-              
-              if (i % 200 === 0) {
-                  x = (Math.random()-0.5)*4; 
-                  y = (Math.random()-0.5)*4; 
-                  z = (Math.random()-0.5)*4; 
-              }
+              if (i % 200 === 0) { x = (Math.random()-0.5)*4; y = (Math.random()-0.5)*4; z = (Math.random()-0.5)*4; }
           }
       } else if (type === 'menger') {
-           // Menger Cage
-           const side = 3.5 * SCALE;
+           const side = 3.0 * SCALE; 
            for(let i=0; i<PARTICLE_COUNT; i++) {
                let x = Math.random(), y = Math.random(), z = Math.random();
-               
                for(let j=0; j<3; j++) {
                    if (x > 0.33 && x < 0.66 && y > 0.33 && y < 0.66) { x+=10; break; }
                    if (y > 0.33 && y < 0.66 && z > 0.33 && z < 0.66) { x+=10; break; }
                    if (z > 0.33 && z < 0.66 && x > 0.33 && x < 0.66) { x+=10; break; }
                    x = (x * 3) % 1; y = (y * 3) % 1; z = (z * 3) % 1;
                }
-               
-               if (x > 1.0) { 
-                   x = Math.random() > 0.5 ? 0.05 : 0.95; 
-                   y = Math.random();
-                   z = Math.random();
-                   x += (Math.random()-0.5) * 0.2;
-               }
-               
+               if (x > 1.0) { x=Math.random()>0.5?0.05:0.95; y=Math.random(); z=Math.random(); x+=(Math.random()-0.5)*0.2; }
                let fx = (x - 0.5) * side;
                let fy = (y - 0.5) * side;
                let fz = (z - 0.5) * side;
-               
                const angle = fy * 0.5;
-               const tx = fx * Math.cos(angle) - fz * Math.sin(angle);
-               const tz = fx * Math.sin(angle) + fz * Math.cos(angle);
-               
-               arr[i*3] = tx;
+               arr[i*3] = fx * Math.cos(angle) - fz * Math.sin(angle);
                arr[i*3+1] = fy;
-               arr[i*3+2] = tz;
+               arr[i*3+2] = fx * Math.sin(angle) + fz * Math.cos(angle);
            }
       } else if (type === 'galaxy') {
-          // Radial Fan
           const numPetals = 30; 
           const particlesPerPetal = Math.floor(PARTICLE_COUNT / numPetals);
           const radius = 5.0 * SCALE;
-          
           for(let i=0; i<PARTICLE_COUNT; i++) {
               const petalIdx = Math.floor(i / particlesPerPetal);
               const t = (i % particlesPerPetal) / particlesPerPetal; 
-              
               const angle = (petalIdx / numPetals) * Math.PI * 2;
-              
               const r = t * radius;
               const width = Math.sin(t * Math.PI) * 1.2 * SCALE * t; 
-              
               const wRandom = (Math.random() - 0.5) * width;
-              
               const xLocal = r;
               const yLocal = wRandom;
               const zLocal = (Math.random() - 0.5) * 0.2 * SCALE; 
-              
-              const x = xLocal * Math.cos(angle) - yLocal * Math.sin(angle);
-              const y = xLocal * Math.sin(angle) + yLocal * Math.cos(angle);
-              const z = zLocal + Math.sin(angle * 3.0) * 0.5;
-              
-              arr[i*3] = x;
-              arr[i*3+1] = y;
-              arr[i*3+2] = z;
+              arr[i*3] = xLocal * Math.cos(angle) - yLocal * Math.sin(angle);
+              arr[i*3+1] = xLocal * Math.sin(angle) + yLocal * Math.cos(angle);
+              arr[i*3+2] = zLocal + Math.sin(angle * 3.0) * 0.5;
           }
-      } else if (type === 'penrose') {
-          const len = 4.0 * SCALE;
-          const thick = 0.6 * SCALE;
+      } else if (type === 'strobe') {
+          const slices = 64; 
+          const particlesPerSlice = Math.floor(PARTICLE_COUNT / slices);
+          const rBase = 0.5 * SCALE;
           for(let i=0; i<PARTICLE_COUNT; i++) {
-              const part = i % 3;
-              const t = Math.random() * len - len/2;
-              let px=0, py=0, pz=0;
-              const tx = (Math.random()-0.5) * thick;
-              const ty = (Math.random()-0.5) * thick;
-              if (part === 0) { px = t; py = -len/3 + tx; pz = ty; } 
-              else if (part === 1) { px = len/2 - (t+len/2)*0.5 + tx; py = -len/3 + (t+len/2)*0.866 + ty; pz = ty; } 
-              else { px = -len/2 + (t+len/2)*0.5 + tx; py = -len/3 + (len - (t+len/2))*0.866 + ty; pz = px * 0.5; }
-              arr[i*3] = px; arr[i*3+1] = py; arr[i*3+2] = pz;
+              const sliceIdx = Math.floor(i / particlesPerSlice);
+              const progress = sliceIdx / slices; 
+              const angle = progress * Math.PI * 2.0; 
+              const r = rBase + progress * 2.5 * SCALE;
+              const u = Math.random(); const v = Math.random();
+              const bladeLen = 1.2 * SCALE * u;
+              const bladeWidth = 0.3 * SCALE * (1 - u);
+              const xL = bladeLen;
+              const yL = (v - 0.5) * bladeWidth;
+              const tilt = angle + Math.PI/2;
+              arr[i*3] = r * Math.cos(angle) + (xL * Math.cos(tilt) - yL * Math.sin(tilt));
+              arr[i*3+1] = r * Math.sin(angle) + (xL * Math.sin(tilt) + yL * Math.cos(tilt));
+              arr[i*3+2] = (Math.random() - 0.5) * 0.05; 
           }
       }
       return arr;
@@ -286,8 +283,36 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
       galaxy: generateShape('galaxy'),
       menger: generateShape('menger'),
       ripple: generateShape('ripple'),
-      penrose: generateShape('penrose')
+      strobe: generateShape('strobe')
   }), []);
+
+  // --- HELPER: Create Thick Wireframe Box ---
+  const createThickBox = (size: number, thickness: number, color: number) => {
+      const group = new THREE.Group();
+      const geometry = new THREE.BoxGeometry(1, 1, 1);
+      const material = new THREE.MeshBasicMaterial({ color: color });
+      const half = size / 2;
+      const addBeam = (x: number, y: number, z: number, sX: number, sY: number, sZ: number) => {
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.position.set(x, y, z);
+          mesh.scale.set(sX, sY, sZ);
+          group.add(mesh);
+      };
+      // 12 edges
+      addBeam(half, 0, half, thickness, size, thickness);
+      addBeam(half, 0, -half, thickness, size, thickness);
+      addBeam(-half, 0, half, thickness, size, thickness);
+      addBeam(-half, 0, -half, thickness, size, thickness);
+      addBeam(0, half, half, size, thickness, thickness);
+      addBeam(0, half, -half, size, thickness, thickness);
+      addBeam(half, half, 0, thickness, thickness, size);
+      addBeam(-half, half, 0, thickness, thickness, size);
+      addBeam(0, -half, half, size, thickness, thickness);
+      addBeam(0, -half, -half, size, thickness, thickness);
+      addBeam(half, -half, 0, thickness, thickness, size);
+      addBeam(-half, -half, 0, thickness, thickness, size);
+      return group;
+  };
 
   // --- INIT THREE.JS ---
   useEffect(() => {
@@ -304,7 +329,8 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
     scene.fog = new THREE.FogExp2(0x000000, 0.05);
 
     const camera = new THREE.PerspectiveCamera(65, width / height, 0.1, 100);
-    camera.position.z = 6;
+    // MOVED CAMERA BACK TO FIT WHOLE SHAPE
+    camera.position.z = 9;
 
     const renderer = new THREE.WebGLRenderer({ 
         antialias: false, 
@@ -321,22 +347,19 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
     const positions = new Float32Array(PARTICLE_COUNT * 3);
     const targetPositions = new Float32Array(PARTICLE_COUNT * 3);
     
-    // Init
-    const initData = shapes.sphere;
-    positions.set(initData);
-    targetPositions.set(initData);
+    positions.set(shapes.sphere);
+    targetPositions.set(shapes.sphere);
 
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     
-    // --- RED BOX HELPER (For Menger) ---
-    const boxGeo = new THREE.BoxGeometry(2.5 * 1.6, 2.5 * 1.6, 2.5 * 1.6);
-    const edges = new THREE.EdgesGeometry(boxGeo);
-    const boxMat = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 1, transparent: true, opacity: 0.6 });
-    const wireframeBox = new THREE.LineSegments(edges, boxMat);
+    // Wireframe Box
+    const boxSize = 2.5 * 1.6; 
+    const boxThickness = 0.05; 
+    const wireframeBox = createThickBox(boxSize, boxThickness, 0xff0000); 
     wireframeBox.visible = false; 
     scene.add(wireframeBox);
 
-    // --- SHADER MATERIAL ---
+    // --- PARTICLE SHADER MATERIAL ---
     const material = new THREE.ShaderMaterial({
         uniforms: {
             color: { value: new THREE.Color(colorTheme) },
@@ -344,7 +367,8 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             time: { value: 0 },
             beat: { value: 0.0 }, 
             distortion: { value: 0.0 },
-            isRipple: { value: 0.0 } 
+            isRipple: { value: 0.0 },
+            gestureIntensity: { value: 0.0 }
         },
         vertexShader: `
             uniform float size;
@@ -352,6 +376,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             uniform float beat;
             uniform float distortion;
             uniform float isRipple;
+            uniform float gestureIntensity;
             varying float vDist;
             
             float rand(vec3 co){ return fract(sin(dot(co.xyz ,vec3(12.9898,78.233,45.543))) * 43758.5453); }
@@ -359,7 +384,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             void main() {
                 vec3 pos = position;
                 
-                // 1. RHYTHM UNDULATION (For Ripple)
+                // 1. RHYTHM UNDULATION (For Ripple Shape)
                 if (isRipple > 0.5) {
                     float wave = sin(pos.x * 2.0 + pos.z * 1.5 + time * 2.0);
                     pos.y += wave * beat * 0.8; 
@@ -370,9 +395,17 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                     pos += normal * beat * n * 0.4; 
                 }
                 
-                // 3. Glitch Jitter
-                if (distortion > 0.0) {
-                    pos.x += sin(pos.y * 40.0 + time * 20.0) * distortion * 0.08;
+                // 3. PHYSICAL GLITCH (Quantum Jitter)
+                // Randomly offset particles horizontally on strong beats
+                if (beat > 0.5) {
+                    float jitter = sin(pos.y * 50.0 + time * 40.0) * 0.1 * beat;
+                    pos.x += jitter;
+                }
+
+                // 4. HAND GESTURE RIPPLE (Pinch Interaction)
+                if (gestureIntensity > 0.0) {
+                    float jitter = sin(pos.y * 50.0 + time * 30.0) * cos(pos.x * 50.0);
+                    pos += normal * jitter * gestureIntensity * 0.4;
                 }
 
                 vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
@@ -390,15 +423,11 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             
             void main() {
                 vec2 center = gl_PointCoord - 0.5;
-                // Soften particles a tiny bit for less harshness
                 if (length(center) > 0.5) discard;
                 
                 vec3 finalColor = color;
-                
-                // Gentler fade
+                // Fade distant particles
                 float alpha = 1.0 - smoothstep(1.0, 12.0, vDist); 
-                
-                // Center solidity
                 float core = 1.0 - length(center) * 1.5;
                 alpha *= clamp(core + 0.3, 0.0, 1.0);
 
@@ -413,19 +442,20 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
     const particles = new THREE.Points(geometry, material);
     scene.add(particles);
 
-    // --- POST PROCESSING ---
+    // --- POST PROCESSING (CHAOS GLITCH) ---
     const composer = new EffectComposer(renderer);
     const renderPass = new RenderPass(scene, camera);
     composer.addPass(renderPass);
 
-    // Bloom: TAMED for structure visibility
+    // Bloom: Enhance glow
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
     bloomPass.strength = exposure; 
-    bloomPass.radius = 0.2; // Tighter glow
-    bloomPass.threshold = 0.25; // Don't bloom everything
+    bloomPass.radius = 0.2; 
+    bloomPass.threshold = 0.25; 
     composer.addPass(bloomPass);
 
-    const glitchPass = new ShaderPass(AcidGlitchShader);
+    // Glitch: The new intense shader
+    const glitchPass = new ShaderPass(ChaosGlitchShader);
     composer.addPass(glitchPass);
 
     sceneRef.current = { 
@@ -453,38 +483,46 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
         }
         const nBass = bass / 255; 
         
-        // 2. Interaction
-        particles.rotation.y += (handRef.current.rotation.y - particles.rotation.y) * 0.05;
-        particles.rotation.x += (handRef.current.rotation.x - particles.rotation.x) * 0.05;
+        // 2. Interaction (Apply Hand Gestures)
+        // INCREASED SENSITIVITY: Faster lerp (0.2 instead of 0.1)
+        particles.rotation.y += (handRef.current.rotation.y - particles.rotation.y) * 0.2;
+        particles.rotation.x += (handRef.current.rotation.x - particles.rotation.x) * 0.2;
         
-        if (wireframeBox.visible) {
-            wireframeBox.rotation.copy(particles.rotation);
-            wireframeBox.rotation.z += 0.001; 
-        }
-
         const currentScale = particles.scale.x;
-        const newScale = currentScale + (handRef.current.zoom - currentScale) * 0.1;
+        const newScale = currentScale + (handRef.current.zoom - currentScale) * 0.2;
         particles.scale.set(newScale, newScale, newScale);
         wireframeBox.scale.set(newScale, newScale, newScale);
+        
+        if (wireframeBox.visible) wireframeBox.rotation.copy(particles.rotation);
 
-        if (!handRef.current.isDetecting) {
-            particles.rotation.y += 0.001;
+        // Idle rotation
+        if (!handRef.current.isDetectingRight) {
+            particles.rotation.z += 0.0005;
         }
 
-        // 3. Update Uniforms
+        // 3. Update Particle Uniforms
         const isBeat = nBass > 0.5;
         material.uniforms.time.value = time;
         material.uniforms.beat.value = nBass * sensitivity; 
         material.uniforms.distortion.value = isBeat ? nBass : 0.0;
+        material.uniforms.gestureIntensity.value = THREE.MathUtils.lerp(
+            material.uniforms.gestureIntensity.value, 
+            handRef.current.isRippleGesture, 
+            0.2
+        );
 
-        // 4. Glitch & Bloom
-        let glitchAmt = isBeat ? nBass * 1.5 : 0.0; 
-        glitchPass.uniforms.amount.value = THREE.MathUtils.lerp(glitchPass.uniforms.amount.value, glitchAmt, 0.2);
+        // 4. Update GLITCH Uniforms (Intense & Reactive)
+        // Pass audio beat directly to glitch shader for sync
+        glitchPass.uniforms.beat.value = nBass; 
+        
+        // Base glitch amount + Hand Ripple Influence
+        let targetGlitch = isBeat ? nBass * 0.8 : 0.0; 
+        targetGlitch += handRef.current.isRippleGesture * 0.8; // Hand gesture adds heavy glitch
+        
+        glitchPass.uniforms.amount.value = THREE.MathUtils.lerp(glitchPass.uniforms.amount.value, targetGlitch, 0.3);
         glitchPass.uniforms.time.value = time;
         
-        // Keep bloom controlled: Base + small bump
-        // Cap max strength to prevent washout
-        const targetStrength = exposure + (isBeat ? nBass * 0.15 : 0);
+        const targetStrength = exposure + (isBeat ? nBass * 0.5 : 0);
         bloomPass.strength = THREE.MathUtils.lerp(bloomPass.strength, targetStrength, 0.1);
 
         // 5. Morphing
@@ -524,7 +562,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
     };
   }, []);
 
-  // --- HAND TRACKING SETUP (Same as before) ---
+  // --- HAND TRACKING SETUP (Preserved & Functional) ---
   useEffect(() => {
       let handLandmarker: HandLandmarker | null = null;
       let lastVideoTime = -1;
@@ -541,7 +579,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                       delegate: "GPU"
                   },
                   runningMode: "VIDEO",
-                  numHands: 1
+                  numHands: 2 
               });
 
               if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -550,7 +588,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                       videoRef.current.srcObject = stream;
                       videoRef.current.addEventListener("loadeddata", () => {
                           setVisionReady(true);
-                          setStatusText("HAND TRACKING ACTIVE");
+                          setStatusText("HAND TRACKING ACTIVE (L:ZOOM R:ROTATE/FX)");
                           predict();
                       });
                   }
@@ -566,20 +604,48 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
           if (videoRef.current.currentTime !== lastVideoTime && !videoRef.current.paused) {
               lastVideoTime = videoRef.current.currentTime;
               const result = handLandmarker.detectForVideo(videoRef.current, performance.now());
+              
+              let foundLeft = false;
+              let foundRight = false;
+
               if (result.landmarks && result.landmarks.length > 0) {
-                  handRef.current.isDetecting = true;
-                  const lm = result.landmarks[0];
-                  const rx = (lm[0].x - 0.5) * 3.0; 
-                  const ry = (lm[0].y - 0.5) * 3.0;
-                  handRef.current.rotation.y = rx;
-                  handRef.current.rotation.x = ry; 
-                  const pinch = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
-                  const scale = 0.5 + (pinch * 4.0); 
-                  handRef.current.zoom = Math.min(Math.max(scale, 0.2), 2.0);
-              } else {
-                  handRef.current.isDetecting = false;
-                  handRef.current.zoom = 1.0; 
+                  for(let i=0; i<result.landmarks.length; i++) {
+                      const landmarks = result.landmarks[i];
+                      const handedness = result.handedness[i][0].categoryName;
+                      
+                      // LEFT HAND: Zoom
+                      if (handedness === "Left") {
+                          foundLeft = true;
+                          const p1 = landmarks[4]; // Thumb Tip
+                          const p2 = landmarks[8]; // Index Tip
+                          const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+                          const normalized = Math.min(Math.max((dist - 0.02) / 0.25, 0), 1);
+                          
+                          // UPDATED ZOOM RANGE: 0.4 (min) to 3.5 (max) - Better visibility
+                          const minScale = 0.4;
+                          const maxScale = 3.5;
+                          handRef.current.zoom = minScale + normalized * (maxScale - minScale);
+                      } 
+                      
+                      // RIGHT HAND: Rotation & Ripple
+                      if (handedness === "Right") {
+                          foundRight = true;
+                          const indexTip = landmarks[8];
+                          const middleTip = landmarks[12];
+                          
+                          // Rotation (INCREASED SENSITIVITY from 8.0 to 15.0)
+                          handRef.current.rotation.y = (indexTip.x - 0.5) * 15.0; 
+                          handRef.current.rotation.x = (indexTip.y - 0.5) * 15.0; 
+                          
+                          // Ripple (Pinch) - Eased threshold from 0.05 to 0.08
+                          const fingersDist = Math.hypot(indexTip.x - middleTip.x, indexTip.y - middleTip.y);
+                          handRef.current.isRippleGesture = (fingersDist < 0.08) ? 1.0 : 0.0;
+                      }
+                  }
               }
+              
+              handRef.current.isDetectingLeft = foundLeft;
+              handRef.current.isDetectingRight = foundRight;
           }
           animationFrameId = requestAnimationFrame(predict);
       };
@@ -615,7 +681,6 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                   sceneRef.current.targetPositions.set(sig);
                   setCurrentShapeName("专属声纹");
                   setActiveShape('signature');
-                  // Reset special states
                   if (sceneRef.current.wireframeBox) sceneRef.current.wireframeBox.visible = false;
                   if (sceneRef.current.material) sceneRef.current.material.uniforms.isRipple.value = 0.0;
               }
@@ -634,12 +699,9 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
       if (!sceneRef.current.targetPositions) return;
       setActiveShape(shapeKey);
       
-      // Box Logic
       if (sceneRef.current.wireframeBox) {
           sceneRef.current.wireframeBox.visible = (shapeKey === 'menger');
       }
-      
-      // Ripple Logic
       if (sceneRef.current.material) {
           sceneRef.current.material.uniforms.isRipple.value = (shapeKey === 'ripple') ? 1.0 : 0.0;
       }
@@ -653,6 +715,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
           switch(shapeKey) {
               case 'lorenz': name = "Thomas Attractor (Complex)"; break;
               case 'galaxy': name = "时空光轮 (Chronos)"; break;
+              case 'strobe': name = "时空残影 (Strobe)"; break;
               case 'menger': name = "Menger Cage (Squeezed)"; break;
               case 'penrose': name = "彭罗斯三角"; break;
               case 'ripple': name = "Sonic Ripple (Wave)"; break;
@@ -662,7 +725,6 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
       setCurrentShapeName(name);
   };
 
-  // Update Visuals dynamically
   useEffect(() => {
       if (sceneRef.current.material) {
           sceneRef.current.material.uniforms.color.value.set(colorTheme);
@@ -680,8 +742,18 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
   return (
     <div className="fixed inset-0 bg-[#020202] text-white font-sans overflow-hidden select-none">
         
-        {/* Hidden Video */}
-        <video ref={videoRef} className="absolute opacity-0 pointer-events-none w-1 h-1" autoPlay playsInline muted></video>
+        {/* WEBCAM FEED (Bottom Right) */}
+        <div className="absolute bottom-6 right-6 z-30 flex flex-col items-end pointer-events-none">
+            <video 
+                ref={videoRef} 
+                className="w-32 md:w-40 h-auto rounded-sm border border-white/20 shadow-[0_0_20px_rgba(255,255,255,0.1)] grayscale contrast-125 brightness-110 opacity-90"
+                autoPlay 
+                playsInline 
+                muted
+                style={{ transform: 'scaleX(-1)' }}
+            ></video>
+            <div className="text-[9px] text-white/30 mt-1 tracking-widest uppercase">Input Feed</div>
+        </div>
 
         {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-black z-50">
@@ -704,7 +776,6 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
         <div ref={mountRef} className="absolute inset-0 z-0 bg-black" />
 
         {/* --- UI LAYER --- */}
-        
         <div className="absolute top-6 left-6 z-20 w-80 bg-black/60 backdrop-blur-xl border border-white/5 p-4 rounded-sm shadow-2xl">
              <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2">
                  <h2 className="text-[10px] text-gray-500 tracking-[0.2em] font-bold uppercase">Audio Feed</h2>
@@ -805,6 +876,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                                         {k:'lorenz',l:'吸引子 (Thomas)'}, 
                                         {k:'menger',l:'牢笼 (Cage)'}, 
                                         {k:'galaxy',l:'光轮 (Chronos)'}, 
+                                        {k:'strobe',l:'时空残影 (Strobe)'},
                                         {k:'penrose',l:'彭罗斯 (Penrose)'}
                                     ].map(s => (
                                         <button 
