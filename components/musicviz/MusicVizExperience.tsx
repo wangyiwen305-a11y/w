@@ -18,7 +18,7 @@ const Icons = {
     Plus: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
 };
 
-// --- CHAOS GLITCH SHADER V6 (Wide Data Moshing) ---
+// --- CHAOS GLITCH SHADER V6 (Peach/White Short Circuit) ---
 const ChaosGlitchShader = {
     uniforms: {
         "tDiffuse": { value: null },
@@ -62,29 +62,23 @@ const ChaosGlitchShader = {
             // INTENSITY CONTROL
             float totalGlitch = amount * 0.3 + beat * 0.9; 
             
-            // 1. DATA MOSHING (Wide Macroblock Displacement)
-            if (beat > 0.4) {
-                // To stretch horizontally, use fewer subdivisions in X (low val) and more in Y (high val)
-                float blockX = 2.0 + (1.0-beat) * 10.0;  // Very wide blocks
-                float blockY = 40.0 + (1.0-beat) * 60.0; // Thin strips
-                vec2 blockScale = vec2(blockX, blockY);
-                
-                vec2 blocks = floor(p * blockScale) / blockScale;
-                
-                // Flow calculation
-                float flowX = (noise(blocks * 5.0 + time) - 0.5) * 0.15 * beat; // Stronger X flow
-                float flowY = (noise(blocks * 5.0 + time + 50.0) - 0.5) * 0.02 * beat; // Weaker Y flow
-                
-                if (rand(blocks + vec2(time)) > 0.6) {
-                    p += vec2(flowX, flowY);
-                }
-            }
-
-            // 2. HORIZONTAL SLICE OFFSET
+            // 1. HORIZONTAL SLICE OFFSET (Restored)
             if (beat > 0.6) {
                 float slice = step(0.9, sin(p.y * 50.0 + time * 20.0)); 
                 float offset = (rand(vec2(time, floor(p.y * 20.0))) - 0.5) * 0.1 * slice;
                 p.x += offset;
+            }
+
+            // 2. DATA MOSHING (Macroblock Displacement)
+            if (beat > 0.4) {
+                float blockSize = 20.0 + (1.0-beat) * 50.0; // Variable block size
+                vec2 blocks = floor(p * blockSize) / blockSize;
+                float flowX = (noise(blocks * 10.0 + time) - 0.5) * 0.1 * beat;
+                float flowY = (noise(blocks * 10.0 + time + 50.0) - 0.5) * 0.1 * beat;
+                
+                if (rand(blocks + time) > 0.6) {
+                    p += vec2(flowX, flowY);
+                }
             }
 
             // 3. RGB SPLIT
@@ -100,7 +94,7 @@ const ChaosGlitchShader = {
             // 4. SHORT CIRCUIT / SYSTEM FAILURE FLASH (Peach/White)
             if (flash > 0.5) {
                 float strobe = step(0.5, sin(time * 60.0)); 
-                vec3 peach = vec3(1.0, 0.85, 0.8);
+                vec3 peach = vec3(1.0, 0.85, 0.8); 
                 vec3 white = vec3(1.0, 1.0, 1.0);
                 vec3 failColor = mix(peach, white, strobe);
                 
@@ -405,6 +399,42 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
       return group;
   };
 
+  // --- HELPER: Create Glitch Character Texture ---
+  const createGlitchCharTexture = () => {
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if(ctx) {
+          ctx.fillStyle = 'rgba(0,0,0,0)';
+          ctx.fillRect(0, 0, size, size);
+          
+          // Draw random Matrix-style code characters
+          ctx.fillStyle = 'white';
+          ctx.font = 'bold 40px monospace';
+          
+          // Columns
+          for(let i=0; i<15; i++) {
+              for(let j=0; j<15; j++) {
+                  if (Math.random() > 0.6) {
+                      // Random characters: Numbers, Katakana-ish, Symbols
+                      const chars = "0123456789ABCDEFX!<>[]{}/\\@#";
+                      const char = chars.charAt(Math.floor(Math.random() * chars.length));
+                      
+                      // Slight offset
+                      const x = (i * 35) + (Math.random() - 0.5) * 10;
+                      const y = (j * 35) + (Math.random() - 0.5) * 10;
+                      
+                      ctx.globalAlpha = 0.5 + Math.random() * 0.5;
+                      ctx.fillText(char, x, y);
+                  }
+              }
+          }
+      }
+      return new THREE.CanvasTexture(canvas);
+  };
+
   // --- INIT THREE.JS ---
   useEffect(() => {
     const timer = setInterval(() => {
@@ -450,22 +480,8 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
     wireframeBox.visible = false; 
     scene.add(wireframeBox);
 
-    // --- BACKGROUND GRID PLANE ---
-    // Infinite dark grid floor with horizon fade
-    const gridHelper = new THREE.GridHelper(60, 60, 0x333333, 0x111111);
-    gridHelper.position.y = -4; 
-    gridHelper.material.transparent = true;
-    gridHelper.material.opacity = 0.4;
-    scene.add(gridHelper);
-    
-    // Additional Top Grid for sci-fi tunnel feel
-    const gridHelperTop = new THREE.GridHelper(60, 60, 0x333333, 0x111111);
-    gridHelperTop.position.y = 4;
-    gridHelperTop.material.transparent = true;
-    gridHelperTop.material.opacity = 0.15;
-    scene.add(gridHelperTop);
-
-    // --- BACKGROUND DYNAMIC LINES ---
+    // --- BACKGROUND DYNAMIC LINES (NEW) ---
+    // Creating 3 large vertical curves that segment the background
     const bgLineGroup = new THREE.Group();
     const lineCount = 200;
     const linePos = new Float32Array(lineCount * 3);
@@ -530,8 +546,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             void main() {
                 float alpha = 1.0 - abs(vY);
                 alpha = pow(alpha, 0.5);
-                // Enhanced Visibility: Boosted multiplier from 0.3 to 0.8
-                gl_FragColor = vec4(uColor, alpha * 0.8); 
+                gl_FragColor = vec4(uColor, alpha * 0.8); // Enhanced Visibility (0.8)
             }
         `,
         transparent: true,
@@ -560,7 +575,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             distortion: { value: 0.0 },
             isRipple: { value: 0.0 },
             gestureIntensity: { value: 0.0 },
-            zBounce: { value: 0.0 }
+            zBounce: { value: 0.0 } // NEW: 3D Bounce Intensity
         },
         vertexShader: `
             uniform float size;
@@ -577,34 +592,50 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             void main() {
                 vec3 pos = position;
                 
+                // 1. RHYTHM UNDULATION (For Ripple Shape)
                 if (isRipple > 0.5) {
                     float wave = sin(pos.x * 2.0 + pos.z * 1.5 + time * 2.0);
                     pos.y += wave * beat * 0.8; 
-                } else if (beat > 0.1) {
+                } 
+                // 2. STANDARD BEAT DISTORTION
+                else if (beat > 0.1) {
                     float n = rand(pos + time);
                     pos += normal * beat * n * 0.4; 
                 }
                 
+                // 3. PHYSICAL GLITCH (Quantum Jitter)
                 if (beat > 0.5) {
                     float jitter = sin(pos.y * 50.0 + time * 40.0) * 0.1 * beat;
                     pos.x += jitter;
                 }
 
+                // 4. HAND GESTURE RIPPLE (Pinch Interaction)
                 if (gestureIntensity > 0.0) {
                     float jitter = sin(pos.y * 50.0 + time * 30.0) * cos(pos.x * 50.0);
                     pos += normal * jitter * gestureIntensity * 0.4;
                 }
 
+                // 5. PARTICLE EXPLOSION (Right Hand Hollow Circle)
+                // Expands particles radially outwards with noise to simulate shattering
                 if (zBounce > 0.0) {
+                    // Direction from center (or use 0,1,0 if at center)
                     vec3 explosionDir = normalize(pos);
                     if (length(pos) < 0.001) explosionDir = vec3(0.0, 1.0, 0.0);
+
+                    // Scatter effect: randomization based on original position
                     float scatter = rand(position + time) * 0.5 + 0.5;
+                    
+                    // Apply outward explosion
+                    // Multiplier tuned for visible "shattering" effect
                     pos += explosionDir * zBounce * scatter * 15.0; 
                 }
 
                 vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
                 gl_Position = projectionMatrix * mvPosition;
+                
                 vDist = length(pos);
+                
+                // Size attenuation
                 gl_PointSize = size * (1.0 + beat * 2.5) * (300.0 / -mvPosition.z);
             }
         `,
@@ -617,6 +648,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                 if (length(center) > 0.5) discard;
                 
                 vec3 finalColor = color;
+                // Fade distant particles
                 float alpha = 1.0 - smoothstep(1.0, 12.0, vDist); 
                 float core = 1.0 - length(center) * 1.5;
                 alpha *= clamp(core + 0.3, 0.0, 1.0);
@@ -631,6 +663,34 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
 
     const particles = new THREE.Points(geometry, material);
     scene.add(particles);
+
+    // --- GLITCH TEXT PARTICLES (New Addition) ---
+    // Create a cloud of "text code" around the main object
+    const textGeo = new THREE.BufferGeometry();
+    const textCount = 600;
+    const textPos = new Float32Array(textCount * 3);
+    for(let i=0; i<textCount; i++) {
+        // Sphere shell distribution
+        const r = 3.5 + Math.random() * 2.0; // Radius slightly larger than main shape
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        textPos[i*3] = r * Math.sin(phi) * Math.cos(theta);
+        textPos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+        textPos[i*3+2] = r * Math.cos(phi);
+    }
+    textGeo.setAttribute('position', new THREE.BufferAttribute(textPos, 3));
+    
+    const textMaterial = new THREE.PointsMaterial({
+        color: 0xffffff,
+        size: 0.4,
+        map: createGlitchCharTexture(),
+        transparent: true,
+        opacity: 0.0, // Hidden by default, controlled by beat
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
+    const textParticles = new THREE.Points(textGeo, textMaterial);
+    scene.add(textParticles);
 
     // --- POST PROCESSING (CHAOS GLITCH) ---
     const composer = new EffectComposer(renderer);
@@ -650,7 +710,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
 
     sceneRef.current = { 
         scene, camera, renderer, particles, material, composer, glitchPass, 
-        targetPositions, geometry, bloomPass, wireframeBox,
+        targetPositions, geometry, bloomPass, wireframeBox, textParticles, textMaterial,
         bgLines // Store refs to lines to update uniforms
     };
     setLoading(false);
@@ -731,7 +791,28 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
         const targetStrength = exposure + (isBeat ? nBass * 0.5 : 0);
         bloomPass.strength = THREE.MathUtils.lerp(bloomPass.strength, targetStrength, 0.1);
 
-        // 5. Update Background Lines Uniforms
+        // 5. Update Glitch Text Particles (Added Feature)
+        // Rotate text field
+        if (sceneRef.current.textParticles) {
+            sceneRef.current.textParticles.rotation.y -= 0.002;
+            sceneRef.current.textParticles.rotation.z += 0.001;
+            
+            // Pulse opacity based on beat
+            // RESTORED OPACITY
+            const textOpacity = nBass > 0.3 ? nBass * 0.8 : 0.0;
+            sceneRef.current.textMaterial.opacity = THREE.MathUtils.lerp(
+                sceneRef.current.textMaterial.opacity, 
+                textOpacity, 
+                0.2
+            );
+            
+            // Scramble position slightly on beat
+            if (isBeat) {
+                sceneRef.current.textParticles.rotation.x += (Math.random() - 0.5) * 0.1;
+            }
+        }
+
+        // 6. Update Background Lines Uniforms
         if (sceneRef.current.bgLines) {
             sceneRef.current.bgLines.forEach((line: THREE.Line) => {
                 const mat = line.material as THREE.ShaderMaterial;
@@ -740,7 +821,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             });
         }
 
-        // 6. Morphing
+        // 7. Morphing
         const currentPositions = geometry.attributes.position.array as Float32Array;
         const targets = sceneRef.current.targetPositions;
         const morphSpeed = 3.0 * delta;
