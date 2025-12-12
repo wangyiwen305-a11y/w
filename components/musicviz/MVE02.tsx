@@ -405,6 +405,42 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
       return group;
   };
 
+  // --- HELPER: Create Glitch Character Texture ---
+  const createGlitchCharTexture = () => {
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if(ctx) {
+          ctx.fillStyle = 'rgba(0,0,0,0)';
+          ctx.fillRect(0, 0, size, size);
+          
+          // Draw random Matrix-style code characters
+          ctx.fillStyle = 'white';
+          ctx.font = 'bold 40px monospace';
+          
+          // Columns
+          for(let i=0; i<15; i++) {
+              for(let j=0; j<15; j++) {
+                  if (Math.random() > 0.6) {
+                      // Random characters: Numbers, Katakana-ish, Symbols
+                      const chars = "0123456789ABCDEFX!<>[]{}/\\@#";
+                      const char = chars.charAt(Math.floor(Math.random() * chars.length));
+                      
+                      // Slight offset
+                      const x = (i * 35) + (Math.random() - 0.5) * 10;
+                      const y = (j * 35) + (Math.random() - 0.5) * 10;
+                      
+                      ctx.globalAlpha = 0.5 + Math.random() * 0.5;
+                      ctx.fillText(char, x, y);
+                  }
+              }
+          }
+      }
+      return new THREE.CanvasTexture(canvas);
+  };
+
   // --- INIT THREE.JS ---
   useEffect(() => {
     const timer = setInterval(() => {
@@ -450,22 +486,8 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
     wireframeBox.visible = false; 
     scene.add(wireframeBox);
 
-    // --- BACKGROUND GRID PLANE ---
-    // Infinite dark grid floor with horizon fade
-    const gridHelper = new THREE.GridHelper(60, 60, 0x333333, 0x111111);
-    gridHelper.position.y = -4; 
-    gridHelper.material.transparent = true;
-    gridHelper.material.opacity = 0.4;
-    scene.add(gridHelper);
-    
-    // Additional Top Grid for sci-fi tunnel feel
-    const gridHelperTop = new THREE.GridHelper(60, 60, 0x333333, 0x111111);
-    gridHelperTop.position.y = 4;
-    gridHelperTop.material.transparent = true;
-    gridHelperTop.material.opacity = 0.15;
-    scene.add(gridHelperTop);
-
-    // --- BACKGROUND DYNAMIC LINES ---
+    // --- BACKGROUND DYNAMIC LINES (NEW) ---
+    // Creating 3 large vertical curves that segment the background
     const bgLineGroup = new THREE.Group();
     const lineCount = 200;
     const linePos = new Float32Array(lineCount * 3);
@@ -500,25 +522,45 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                 
                 float curve = 0.0;
                 
+                // --- DYNAMIC CURVE FUNCTIONS ---
+                
+                // 0: Signature/Sphere -> Gentle symmetric bow
                 if (uShapeId < 0.5) {
                     curve = sin(yNorm * 3.14) * 4.0;
-                } else if (uShapeId < 1.5) {
+                } 
+                // 1: Ripple -> Sine Wave
+                else if (uShapeId < 1.5) {
                     curve = sin(yNorm * 8.0 + uTime) * 2.0;
-                } else if (uShapeId < 2.5) {
+                }
+                // 2: Lorenz -> Chaotic Tangent-like arc
+                else if (uShapeId < 2.5) {
                     curve = tan(yNorm * 1.5 + uTime * 0.2) * 1.5;
                     curve = clamp(curve, -6.0, 6.0);
-                } else if (uShapeId < 3.5) {
+                }
+                // 3: Menger -> Sharp ZigZag (approx with high freq)
+                else if (uShapeId < 3.5) {
                     curve = asin(sin(yNorm * 10.0)) * 2.0;
-                } else if (uShapeId < 4.5) {
+                }
+                // 4: Galaxy -> Spiral twist offset
+                else if (uShapeId < 4.5) {
                     curve = yNorm * 6.0 * sin(uTime * 0.5);
-                } else if (uShapeId < 5.5) {
+                }
+                // 5: Strobe -> Jittery noise line
+                else if (uShapeId < 5.5) {
                     curve = (fract(sin(dot(vec2(yNorm, uTime), vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * 1.0;
-                } else {
+                }
+                // 6: Penrose -> geometric V shape
+                else {
                     curve = abs(yNorm) * 6.0 - 3.0;
                 }
                 
+                // Spread lines horizontally: Left, Center, Right
                 float offset = (uLineIndex - 1.0) * 9.0; 
+                
+                // Apply curve and beat pulse
                 pos.x += curve + offset + sin(yNorm * 20.0 + uTime * 5.0) * 0.1 * uBeat;
+                
+                // Gentle swaying
                 pos.x += sin(uTime * 0.5 + uLineIndex) * 0.5;
 
                 gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
@@ -528,10 +570,10 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             uniform vec3 uColor;
             varying float vY;
             void main() {
+                // Fade out at top/bottom ends
                 float alpha = 1.0 - abs(vY);
                 alpha = pow(alpha, 0.5);
-                // Enhanced Visibility: Boosted multiplier from 0.3 to 0.8
-                gl_FragColor = vec4(uColor, alpha * 0.8); 
+                gl_FragColor = vec4(uColor, alpha * 0.3); // Subtle white
             }
         `,
         transparent: true,
@@ -539,6 +581,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
         blending: THREE.AdditiveBlending
     });
 
+    // Add 3 separate lines
     const bgLines: THREE.Line[] = [];
     for(let k=0; k<3; k++) {
         const matClone = bgLineMaterial.clone();
@@ -560,7 +603,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             distortion: { value: 0.0 },
             isRipple: { value: 0.0 },
             gestureIntensity: { value: 0.0 },
-            zBounce: { value: 0.0 }
+            zBounce: { value: 0.0 } // NEW: 3D Bounce Intensity
         },
         vertexShader: `
             uniform float size;
@@ -577,34 +620,50 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             void main() {
                 vec3 pos = position;
                 
+                // 1. RHYTHM UNDULATION (For Ripple Shape)
                 if (isRipple > 0.5) {
                     float wave = sin(pos.x * 2.0 + pos.z * 1.5 + time * 2.0);
                     pos.y += wave * beat * 0.8; 
-                } else if (beat > 0.1) {
+                } 
+                // 2. STANDARD BEAT DISTORTION
+                else if (beat > 0.1) {
                     float n = rand(pos + time);
                     pos += normal * beat * n * 0.4; 
                 }
                 
+                // 3. PHYSICAL GLITCH (Quantum Jitter)
                 if (beat > 0.5) {
                     float jitter = sin(pos.y * 50.0 + time * 40.0) * 0.1 * beat;
                     pos.x += jitter;
                 }
 
+                // 4. HAND GESTURE RIPPLE (Pinch Interaction)
                 if (gestureIntensity > 0.0) {
                     float jitter = sin(pos.y * 50.0 + time * 30.0) * cos(pos.x * 50.0);
                     pos += normal * jitter * gestureIntensity * 0.4;
                 }
 
+                // 5. PARTICLE EXPLOSION (Right Hand Hollow Circle)
+                // Expands particles radially outwards with noise to simulate shattering
                 if (zBounce > 0.0) {
+                    // Direction from center (or use 0,1,0 if at center)
                     vec3 explosionDir = normalize(pos);
                     if (length(pos) < 0.001) explosionDir = vec3(0.0, 1.0, 0.0);
+
+                    // Scatter effect: randomization based on original position
                     float scatter = rand(position + time) * 0.5 + 0.5;
+                    
+                    // Apply outward explosion
+                    // Multiplier tuned for visible "shattering" effect
                     pos += explosionDir * zBounce * scatter * 15.0; 
                 }
 
                 vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
                 gl_Position = projectionMatrix * mvPosition;
+                
                 vDist = length(pos);
+                
+                // Size attenuation
                 gl_PointSize = size * (1.0 + beat * 2.5) * (300.0 / -mvPosition.z);
             }
         `,
@@ -617,6 +676,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                 if (length(center) > 0.5) discard;
                 
                 vec3 finalColor = color;
+                // Fade distant particles
                 float alpha = 1.0 - smoothstep(1.0, 12.0, vDist); 
                 float core = 1.0 - length(center) * 1.5;
                 alpha *= clamp(core + 0.3, 0.0, 1.0);
@@ -631,6 +691,34 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
 
     const particles = new THREE.Points(geometry, material);
     scene.add(particles);
+
+    // --- GLITCH TEXT PARTICLES (New Addition) ---
+    // Create a cloud of "text code" around the main object
+    const textGeo = new THREE.BufferGeometry();
+    const textCount = 600;
+    const textPos = new Float32Array(textCount * 3);
+    for(let i=0; i<textCount; i++) {
+        // Sphere shell distribution
+        const r = 3.5 + Math.random() * 2.0; // Radius slightly larger than main shape
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        textPos[i*3] = r * Math.sin(phi) * Math.cos(theta);
+        textPos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+        textPos[i*3+2] = r * Math.cos(phi);
+    }
+    textGeo.setAttribute('position', new THREE.BufferAttribute(textPos, 3));
+    
+    const textMaterial = new THREE.PointsMaterial({
+        color: 0xffffff,
+        size: 0.4,
+        map: createGlitchCharTexture(),
+        transparent: true,
+        opacity: 0.0, // Hidden by default, controlled by beat
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
+    const textParticles = new THREE.Points(textGeo, textMaterial);
+    scene.add(textParticles);
 
     // --- POST PROCESSING (CHAOS GLITCH) ---
     const composer = new EffectComposer(renderer);
@@ -650,7 +738,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
 
     sceneRef.current = { 
         scene, camera, renderer, particles, material, composer, glitchPass, 
-        targetPositions, geometry, bloomPass, wireframeBox,
+        targetPositions, geometry, bloomPass, wireframeBox, textParticles, textMaterial,
         bgLines // Store refs to lines to update uniforms
     };
     setLoading(false);
@@ -731,7 +819,27 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
         const targetStrength = exposure + (isBeat ? nBass * 0.5 : 0);
         bloomPass.strength = THREE.MathUtils.lerp(bloomPass.strength, targetStrength, 0.1);
 
-        // 5. Update Background Lines Uniforms
+        // 5. Update Glitch Text Particles (Added Feature)
+        // Rotate text field
+        if (sceneRef.current.textParticles) {
+            sceneRef.current.textParticles.rotation.y -= 0.002;
+            sceneRef.current.textParticles.rotation.z += 0.001;
+            
+            // Pulse opacity based on beat
+            const textOpacity = nBass > 0.3 ? nBass * 0.8 : 0.0;
+            sceneRef.current.textMaterial.opacity = THREE.MathUtils.lerp(
+                sceneRef.current.textMaterial.opacity, 
+                textOpacity, 
+                0.2
+            );
+            
+            // Scramble position slightly on beat
+            if (isBeat) {
+                sceneRef.current.textParticles.rotation.x += (Math.random() - 0.5) * 0.1;
+            }
+        }
+
+        // 6. Update Background Lines Uniforms
         if (sceneRef.current.bgLines) {
             sceneRef.current.bgLines.forEach((line: THREE.Line) => {
                 const mat = line.material as THREE.ShaderMaterial;
@@ -740,7 +848,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             });
         }
 
-        // 6. Morphing
+        // 7. Morphing
         const currentPositions = geometry.attributes.position.array as Float32Array;
         const targets = sceneRef.current.targetPositions;
         const morphSpeed = 3.0 * delta;
@@ -987,17 +1095,17 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
   return (
     <div className="fixed inset-0 bg-[#020202] text-white font-sans overflow-hidden select-none">
         
-        {/* WEBCAM FEED (Bottom Right) - INCREASED SIZE */}
+        {/* WEBCAM FEED (Bottom Right) */}
         <div className="absolute bottom-6 right-6 z-30 flex flex-col items-end pointer-events-none">
             <video 
                 ref={videoRef} 
-                className="w-48 md:w-64 h-auto rounded-md border border-white/20 shadow-[0_0_30px_rgba(255,255,255,0.1)] grayscale contrast-125 brightness-110 opacity-90"
+                className="w-32 md:w-40 h-auto rounded-sm border border-white/20 shadow-[0_0_20px_rgba(255,255,255,0.1)] grayscale contrast-125 brightness-110 opacity-90"
                 autoPlay 
                 playsInline 
                 muted
                 style={{ transform: 'scaleX(-1)' }}
             ></video>
-            <div className="text-[10px] text-white/40 mt-1 tracking-widest uppercase font-bold">Input Feed</div>
+            <div className="text-[9px] text-white/30 mt-1 tracking-widest uppercase">Input Feed</div>
         </div>
 
         {loading && (
