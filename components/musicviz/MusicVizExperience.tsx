@@ -117,6 +117,13 @@ const ChaosGlitchShader = {
     `
 };
 
+// --- FLOATING TEXT WORDS (INCREASED TO 10) ---
+const FLOATING_WORDS = [
+    "SYSTEM", "CORE", "AUDIO", "SYNC", 
+    "DATA", "HOST", "LINK", "SIGNAL", 
+    "WAVE", "PULSE"
+];
+
 interface MusicVizProps {
   onBack: () => void;
 }
@@ -435,6 +442,26 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
       return new THREE.CanvasTexture(canvas);
   };
 
+  // --- HELPER: Create Text Label Texture (NEW) ---
+  const createLabelTexture = (text: string) => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = 512; // High resolution
+      canvas.height = 128;
+      if (ctx) {
+          ctx.clearRect(0,0,512,128);
+          // Pure white monospace text
+          ctx.font = 'bold 60px "Courier New", monospace';
+          ctx.fillStyle = 'rgba(255, 255, 255, 1.0)'; 
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(text, 256, 64);
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.needsUpdate = true;
+      return tex;
+  };
+
   // --- INIT THREE.JS ---
   useEffect(() => {
     const timer = setInterval(() => {
@@ -664,6 +691,49 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
     const particles = new THREE.Points(geometry, material);
     scene.add(particles);
 
+    // --- FLOATING TEXT LABELS (UPDATED: SLOW, RANDOM, WHITE, NO BEAT) ---
+    const labelsGroup = new THREE.Group();
+    FLOATING_WORDS.forEach(text => {
+        const map = createLabelTexture(text);
+        const mat = new THREE.SpriteMaterial({ 
+            map: map, 
+            transparent: true, 
+            opacity: 0.6,   // Reduced opacity for less prominence
+            color: 0xffffff, // Forced White
+            depthWrite: false, 
+            blending: THREE.AdditiveBlending 
+        });
+        const sprite = new THREE.Sprite(mat);
+        
+        // Setup initial random spherical coordinates and movement parameters
+        // We attach these to userData to animate them individually in the loop
+        const r = 2.5 + Math.random() * 2.5; 
+        const theta = Math.random() * Math.PI * 2;
+        const phi = (Math.random() - 0.5) * Math.PI; // -90 to 90 deg
+        
+        sprite.userData = {
+            radius: r,
+            theta: theta,
+            phi: phi,
+            speed: 0.05 + Math.random() * 0.08, // Slow movement speed
+            phase: Math.random() * Math.PI * 2  // Random offset
+        };
+
+        // Initial Position
+        sprite.position.set(
+            r * Math.cos(theta) * Math.cos(phi),
+            r * Math.sin(phi),
+            r * Math.sin(theta) * Math.cos(phi)
+        );
+        
+        // Large Size (Kept large as requested, but opacity handles prominence)
+        const s = 2.0 + Math.random() * 1.5; 
+        sprite.scale.set(s, s * 0.25, 1.0);  
+        
+        labelsGroup.add(sprite);
+    });
+    scene.add(labelsGroup);
+
     // --- GLITCH TEXT PARTICLES (New Addition) ---
     // Create a cloud of "text code" around the main object
     const textGeo = new THREE.BufferGeometry();
@@ -711,7 +781,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
     sceneRef.current = { 
         scene, camera, renderer, particles, material, composer, glitchPass, 
         targetPositions, geometry, bloomPass, wireframeBox, textParticles, textMaterial,
-        bgLines // Store refs to lines to update uniforms
+        bgLines, labelsGroup // Store refs
     };
     setLoading(false);
 
@@ -821,7 +891,36 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             });
         }
 
-        // 7. Morphing
+        // 7. Update Floating Text Labels (UPDATED: Slow Random Movement)
+        if (sceneRef.current.labelsGroup) {
+            sceneRef.current.labelsGroup.children.forEach((sprite: THREE.Sprite) => {
+                const u = sprite.userData;
+                // Calculate new position based on simple orbit mechanics (Slow drift)
+                // We use time * speed to advance the orbit angle
+                const t = time * u.speed;
+                const curTheta = u.theta + t;
+                // Add a slight wobble to the vertical angle (phi)
+                const curPhi = u.phi + Math.sin(t * 0.5 + u.phase) * 0.2; 
+
+                sprite.position.set(
+                    u.radius * Math.cos(curTheta) * Math.cos(curPhi),
+                    u.radius * Math.sin(curPhi),
+                    u.radius * Math.sin(curTheta) * Math.cos(curPhi)
+                );
+                
+                // Ensure text stays upright relative to camera somewhat, or let it tumble? 
+                // Sprites always face camera, so rotation is handled by Three.js automatically.
+                
+                // FORCE WHITE & NO BEAT REACTION
+                // Just in case other logic tried to change it
+                if (sprite.material instanceof THREE.SpriteMaterial) {
+                    sprite.material.color.setHex(0xffffff);
+                    sprite.material.opacity = 0.6; // Keep opacity steady and not too high
+                }
+            });
+        }
+
+        // 8. Morphing
         const currentPositions = geometry.attributes.position.array as Float32Array;
         const targets = sceneRef.current.targetPositions;
         const morphSpeed = 3.0 * delta;
@@ -1068,11 +1167,11 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
   return (
     <div className="fixed inset-0 bg-[#020202] text-white font-sans overflow-hidden select-none">
         
-        {/* WEBCAM FEED (Bottom Right) - INCREASED SIZE */}
-        <div className="absolute bottom-6 right-6 z-30 flex flex-col items-end pointer-events-none">
+        {/* WEBCAM FEED (Bottom Right) - INCREASED SIZE, NO FILTERS */}
+        <div className="absolute bottom-6 right-6 z-50 flex flex-col items-end pointer-events-none">
             <video 
                 ref={videoRef} 
-                className="w-48 md:w-64 h-auto rounded-md border border-white/20 shadow-[0_0_30px_rgba(255,255,255,0.1)] grayscale contrast-125 brightness-110 opacity-90"
+                className="w-48 md:w-64 h-auto rounded-md border border-white/20 shadow-[0_0_30px_rgba(255,255,255,0.1)] opacity-100"
                 autoPlay 
                 playsInline 
                 muted
@@ -1095,7 +1194,10 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
             onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
             onDurationChange={(e) => setDuration(e.currentTarget.duration)}
             onEnded={() => {
-                if(currentSongIndex < playlist.length - 1) loadSong(playlist[currentSongIndex+1], currentSongIndex+1);
+                if(currentSongIndex < playlist.length - 1) {
+                    const nextSong = playlist[currentSongIndex+1];
+                    if (nextSong) loadSong(nextSong, currentSongIndex+1);
+                }
             }}
         />
 
