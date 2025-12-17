@@ -1,4 +1,5 @@
 
+
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -1281,7 +1282,7 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
              </div>
 
              {panelVisible && (
-                <div className={`transition-all duration-300 ease-in-out bg-black/80 backdrop-blur-xl border border-white/5 rounded-sm shadow-2xl overflow-hidden ${panelMinimized ? 'w-12 h-12' : 'w-72 p-5'}`}>
+                <div className={`transition-all duration-300 ease-in-out bg-black/80 backdrop-blur-xl border border-white/5 rounded-sm shadow-2xl overflow-hidden ${panelMinimized ? 'w-12 h-12' : 'w-64 p-4'}`}>
                     {panelMinimized ? (
                         <button onClick={() => setPanelMinimized(false)} className="w-full h-full flex items-center justify-center text-white/30 hover:bg-white/5">
                             <Icons.Plus />
@@ -1323,14 +1324,6 @@ const MusicVizExperience: React.FC<MusicVizProps> = ({ onBack }) => {
                             </div>
 
                             <div className="space-y-4">
-                                <div className="space-y-1">
-                                    <div className="flex justify-between text-[9px] uppercase text-white/30">
-                                        <span>粒子频率 (Sensitivity)</span>
-                                        <span className="text-white/60">{sensitivity.toFixed(1)}</span>
-                                    </div>
-                                    <input type="range" min="0" max="4.0" step="0.1" value={sensitivity} onChange={e => setSensitivity(parseFloat(e.target.value))} className="w-full h-0.5 bg-white/10 appearance-none cursor-pointer accent-white" />
-                                </div>
-
                                 <div className="space-y-1">
                                     <div className="flex justify-between text-[9px] uppercase text-white/30">
                                         <span>曝光度 (Exposure)</span>
